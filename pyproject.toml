@@ -13,6 +13,9 @@ black = "^25.1.0"
 isort = "^6.0.1"
 mypy = "^1.15.0"
 python-dotenv = "^1.0.1"
+pyyaml = "^6.0.2"
+tenacity = "^9.0.0"
+backoff = "^2.2.1"
 
 
 [build-system]

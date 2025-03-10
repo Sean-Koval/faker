@@ -12,6 +12,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from faker import ChatGenerator, Dataset
+from faker.logging_service import LoggingService, JSONLogStore, SQLiteLogStore
+from faker.commands import setup_logging_commands, handle_logging_command
 
 
 def setup_logging(level=logging.INFO, log_file=None):
@@ -89,9 +91,24 @@ def parse_args():
         help="Log file path"
     )
     generate_parser.add_argument(
+        "--log-dir",
+        default="./logs",
+        help="Directory for storing run logs"
+    )
+    generate_parser.add_argument(
+        "--use-db",
+        action="store_true",
+        help="Use SQLite database for run logs"
+    )
+    generate_parser.add_argument(
         "--no-export-run-info",
         action="store_true",
         help="Don't export run information"
+    )
+    generate_parser.add_argument(
+        "--no-logging-service",
+        action="store_true",
+        help="Don't use the logging service"
     )
     
     # View command
@@ -143,6 +160,9 @@ def parse_args():
         action="store_true",
         help="List available datasets"
     )
+    
+    # Add logging commands
+    setup_logging_commands(subparsers)
     
     return parser.parse_args()
 
@@ -417,6 +437,12 @@ def main():
     setup_logging(log_file=log_file)
     logger = logging.getLogger(__name__)
     
+    # Handle logging commands
+    if args.command in ["runs", "metrics"]:
+        result = handle_logging_command(args)
+        print(result)
+        return 0
+    
     if args.command == "generate":
         logger.info(f"Generating dataset using config: {args.config}")
         
@@ -434,6 +460,20 @@ def main():
                 # Try to get from config
                 num_conversations = generator.config.get('dataset', {}).get('num_conversations', 1)
             
+            # Initialize logging service if requested
+            logging_service = None
+            if not args.no_logging_service:
+                if args.use_db:
+                    log_dir = args.log_dir
+                    os.makedirs(log_dir, exist_ok=True)
+                    db_path = os.path.join(log_dir, "runs.db")
+                    store = SQLiteLogStore(db_path=db_path)
+                    logging_service = LoggingService(store=store, log_dir=log_dir)
+                else:
+                    logging_service = LoggingService(log_dir=args.log_dir)
+                    
+                logger.info(f"Using logging service with storage at {args.log_dir}")
+            
             # Start generation
             start_time = time.time()
             logger.info(f"Starting generation of {num_conversations} conversations")
@@ -442,13 +482,20 @@ def main():
             dataset = generator.generate(
                 num_conversations=num_conversations,
                 output_format=args.format,
-                export_run_info=not args.no_export_run_info
+                export_run_info=not args.no_export_run_info,
+                logging_service=logging_service
             )
             
             # Report total time
             total_time = time.time() - start_time
             logger.info(f"Generation completed in {total_time:.2f} seconds")
             logger.info(f"Generated {len(dataset.conversations)} conversations")
+            
+            # Print run ID if using logging service
+            if logging_service and dataset.run_info:
+                print(f"Run ID: {dataset.run_info.id}")
+                print(f"View run details with: python -m faker runs show {dataset.run_info.id}")
+                print(f"View dataset metrics with: python -m faker metrics dataset {dataset.run_info.id}")
             
         except Exception as e:
             logger.error(f"Error generating dataset: {e}", exc_info=True)
@@ -573,6 +620,8 @@ def main():
             print("  generate  Generate synthetic chat data")
             print("  view      View existing chat data")
             print("  info      Show system information")
+            print("  runs      Manage and view run information")
+            print("  metrics   View and analyze metrics")
             print("\nFor more information, run 'python -m faker <command> --help'")
     
     else:

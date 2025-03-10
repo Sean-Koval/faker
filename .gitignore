@@ -41,6 +41,11 @@ coverage.xml
 # Project specific
 output/
 credentials.json
+credentials.json:Zone.Identifier
+logs/*
+!logs/.gitkeep
+!logs/runs/.gitkeep
+!logs/metrics/.gitkeep
 
 # IDE
 .vscode/

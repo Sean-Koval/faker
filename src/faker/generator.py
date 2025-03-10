@@ -124,7 +124,8 @@ class ChatGenerator:
         self, 
         num_conversations: int = 1,
         output_format: str = 'split',
-        export_run_info: bool = True
+        export_run_info: bool = True,
+        logging_service = None
     ) -> Dataset:
         """Generate a dataset of synthetic conversations.
         
@@ -132,6 +133,7 @@ class ChatGenerator:
             num_conversations: Number of conversations to generate
             output_format: Format to export dataset ('jsonl', 'json', 'split')
             export_run_info: Whether to export run information
+            logging_service: Optional LoggingService for tracking metrics
             
         Returns:
             A Dataset object containing the generated conversations
@@ -155,50 +157,88 @@ class ChatGenerator:
         if dataset.run_info:
             dataset.run_info.model_info = self.llm.get_model_info()
         
+        # Initialize run in logging service if provided
+        run_id = None
+        if logging_service:
+            run_id = logging_service.init_run(
+                config=self.config,
+                name=f"Generate {num_conversations} conversations - {dataset.name}"
+            )
+            self.logger.info(f"Initialized run with ID: {run_id}")
+        
         # Start timing
         start_time = time.time()
         
-        # Generate conversations
-        conversations = []
-        for i in range(num_conversations):
-            self.logger.info(f"Generating conversation {i+1}/{num_conversations}")
-            try:
-                conversation = self._generate_conversation()
-                conversations.append(conversation)
-            except Exception as e:
-                self.logger.error(f"Error generating conversation {i+1}: {e}")
-                
-        # Update dataset
-        dataset.conversations = conversations
-        
-        # Complete run information
-        if dataset.run_info:
-            dataset.run_info.complete()
-            dataset.run_info.add_stat("num_conversations", len(conversations))
-            dataset.run_info.add_stat("total_time", time.time() - start_time)
-            dataset.run_info.add_stat("avg_time_per_conversation", 
-                                       (time.time() - start_time) / num_conversations if num_conversations > 0 else 0)
-        
-        # Export dataset
-        if self.output_dir:
-            # Create timestamped directory
-            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            dataset_name = f"{dataset.name}_{timestamp}"
-            output_path = os.path.join(self.output_dir, dataset_name)
+        try:
+            # Generate conversations
+            conversations = []
+            for i in range(num_conversations):
+                self.logger.info(f"Generating conversation {i+1}/{num_conversations}")
+                try:
+                    conversation = self._generate_conversation()
+                    conversations.append(conversation)
+                    
+                    # Log progress if using logging service
+                    if logging_service and run_id:
+                        progress = (i + 1) / num_conversations * 100
+                        logging_service.save_custom_metric(run_id, "progress", progress)
+                        
+                except Exception as e:
+                    self.logger.error(f"Error generating conversation {i+1}: {e}")
+                    if logging_service and run_id:
+                        logging_service.save_custom_metric(
+                            run_id, 
+                            f"error_conversation_{i}", 
+                            {"error": str(e), "index": i}
+                        )
+                    
+            # Update dataset
+            dataset.conversations = conversations
+            
+            # Complete run information
+            if dataset.run_info:
+                dataset.run_info.complete()
+                dataset.run_info.add_stat("num_conversations", len(conversations))
+                dataset.run_info.add_stat("total_time", time.time() - start_time)
+                dataset.run_info.add_stat("avg_time_per_conversation", 
+                                        (time.time() - start_time) / num_conversations if num_conversations > 0 else 0)
             
             # Export dataset
-            exported_path = dataset.export(
-                os.path.join(output_path, f"{dataset_name}.{output_format}"),
-                format=output_format
-            )
-            self.logger.info(f"Dataset exported to: {exported_path}")
+            if self.output_dir:
+                # Create timestamped directory
+                timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                dataset_name = f"{dataset.name}_{timestamp}"
+                output_path = os.path.join(self.output_dir, dataset_name)
+                
+                # Export dataset
+                exported_path = dataset.export(
+                    os.path.join(output_path, f"{dataset_name}.{output_format}"),
+                    format=output_format
+                )
+                self.logger.info(f"Dataset exported to: {exported_path}")
+                
+                # Export run information
+                if export_run_info and dataset.run_info:
+                    run_info_path = dataset.export_run_info(output_path)
+                    self.logger.info(f"Run information exported to: {run_info_path}")
+                
+                # Save output path to logging service
+                if logging_service and run_id:
+                    logging_service.save_custom_metric(run_id, "output_path", exported_path)
             
-            # Export run information
-            if export_run_info and dataset.run_info:
-                run_info_path = dataset.export_run_info(output_path)
-                self.logger.info(f"Run information exported to: {run_info_path}")
+            # Complete run in logging service
+            if logging_service and run_id:
+                logging_service.complete_run(run_id, dataset)
+                self.logger.info(f"Completed run with ID: {run_id}")
+                
+            return dataset
             
-        return dataset
+        except Exception as e:
+            # Log error in logging service
+            if logging_service and run_id:
+                logging_service.log_error(run_id, str(e))
+                self.logger.error(f"Run {run_id} failed: {e}")
+            raise
     
     def _generate_conversation(self) -> Conversation:
         """Generate a single conversation.

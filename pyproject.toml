@@ -18,6 +18,10 @@ tenacity = "^9.0.0"
 backoff = "^2.2.1"
 
 
+[tool.poetry.group.dev.dependencies]
+types-setuptools = "^75.8.2.20250305"
+types-pyyaml = "^6.0.12.20241230"
+
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"

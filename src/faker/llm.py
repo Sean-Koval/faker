@@ -217,6 +217,25 @@ class LLMProvider(ABC):
         return self.provider_type.value
 
 
+# Registry of provider types to provider classes
+PROVIDER_REGISTRY: Dict[ProviderType, Type[LLMProvider]] = {}
+
+def register_provider(provider_cls: Type[LLMProvider]) -> Type[LLMProvider]:
+    """Register a provider class in the provider registry.
+    
+    Args:
+        provider_cls: The provider class to register
+        
+    Returns:
+        The registered provider class
+    """
+    if not hasattr(provider_cls, 'provider_type'):
+        raise ValueError(f"Provider class {provider_cls.__name__} must have a provider_type attribute")
+    
+    PROVIDER_REGISTRY[provider_cls.provider_type] = provider_cls
+    return provider_cls
+
+
 @register_provider
 class VertexAIProvider(LLMProvider):
     """Provider for Google's Vertex AI models."""
@@ -616,23 +635,7 @@ class GeminiProvider(VertexAIProvider):
         )
 
 
-# Registry of provider types to provider classes
-PROVIDER_REGISTRY: Dict[ProviderType, Type[LLMProvider]] = {}
-
-def register_provider(provider_cls: Type[LLMProvider]) -> Type[LLMProvider]:
-    """Register a provider class in the provider registry.
-    
-    Args:
-        provider_cls: The provider class to register
-        
-    Returns:
-        The registered provider class
-    """
-    if not hasattr(provider_cls, 'provider_type'):
-        raise ValueError(f"Provider class {provider_cls.__name__} must have a provider_type attribute")
-    
-    PROVIDER_REGISTRY[provider_cls.provider_type] = provider_cls
-    return provider_cls
+# The register_provider decorator and PROVIDER_REGISTRY are already defined at the top of the file
 
 
 def create_provider(

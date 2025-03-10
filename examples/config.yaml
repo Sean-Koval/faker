@@ -1,0 +1,139 @@
+# Example configuration for Faker
+---
+name: "customer-support-dataset"
+version: "1.0.0"
+description: "A synthetic dataset of customer support conversations"
+tags:
+  - customer_support
+  - synthetic_data
+  - conversation
+
+# LLM provider configuration
+llm:
+  provider: "gemini"
+  model: "gemini-1.5-pro"
+  project_id: "${PROJECT_ID}"         # Will be replaced with env var
+  location: "${LOCATION}"             # Will be replaced with env var
+  credentials_path: "${GOOGLE_APPLICATION_CREDENTIALS}"  # Service account credentials
+  
+  # Generation parameters (can be overridden in conversation section)
+  temperature: 0.7
+  top_p: 0.95
+  top_k: 40
+  max_tokens: 1024
+
+# Dataset generation parameters
+dataset:
+  num_conversations: 50
+  formats: ["split", "json", "jsonl"]  # List of output formats to generate
+  output_dir: "${OUTPUT_DIR}"          # Will be replaced with env var
+
+# Conversation parameters
+conversation:
+  roles:
+    - user
+    - support_agent
+  min_messages: 4
+  max_messages: 12
+  domains:
+    - tech_support
+    - billing
+    - account_issues
+    - product_questions
+  
+  # Generation parameters specific to conversations (overrides llm section)
+  temperature: 0.8   # Higher temperature for more diverse outputs
+  
+  # Additional variables to use in templates
+  variables:
+    company_name: "TechCorp Inc."
+    product_names: 
+      - "CloudServer Pro"
+      - "SecureVPN"
+      - "DataSync"
+      - "MobileGuard"
+    customer_types:
+      - "individual"
+      - "small_business"
+      - "enterprise"
+    support_levels:
+      - "tier_1"
+      - "tier_2"
+      - "tier_3"
+
+# Prompt templates
+templates:
+  # System prompt to control generation (optional)
+  system_prompt: |
+    You are an expert in generating realistic conversational data for training AI systems.
+    Your task is to create authentic-sounding conversations that include all the requested metadata.
+    The content should be diverse but always professional and inoffensive.
+
+  # Main conversation generation template
+  conversation: |
+    Generate a realistic customer support conversation between a customer and a support agent for {{company_name}}.
+    
+    Domain: {{domain}}
+    Product: {{random(product_names)}}
+    Customer Type: {{random(customer_types)}}
+    Support Level: {{random(support_levels)}}
+    
+    The conversation should have between {{min_messages}} and {{max_messages}} total messages,
+    and should represent a complete interaction with a clear issue and resolution.
+    
+    For each message, include the following metadata:
+    - sentiment (positive, neutral, negative)
+    - intent (e.g., greeting, question, clarification, solution, farewell)
+    - entities (list of important named entities mentioned, like product names, technical terms)
+    - topics (list of topics discussed in the message)
+    - formality (formal, casual, technical)
+    
+    Format the output as a JSON array with the following structure:
+    [
+      {
+        "role": "user",
+        "content": "...",
+        "sentiment": "...",
+        "intent": "...",
+        "entities": ["...", "..."],
+        "topics": ["...", "..."],
+        "formality": "..."
+      },
+      {
+        "role": "support_agent",
+        "content": "...",
+        "sentiment": "...",
+        "intent": "...",
+        "entities": ["...", "..."],
+        "topics": ["...", "..."],
+        "formality": "..."
+      },
+      ...
+    ]
+  
+  # Additional templates for generating personas
+  user_persona: |
+    Create a detailed persona for a customer contacting support at {{company_name}}.
+    
+    Include:
+    - Age and demographic information
+    - Technical proficiency level (beginner, intermediate, expert)
+    - Communication style (formal, casual, frustrated, etc.)
+    - Customer type: {{random(customer_types)}}
+    - Background context that might be relevant
+    - Reason for contacting support related to {{random(product_names)}}
+    
+    Format as a JSON object with appropriate fields.
+  
+  support_persona: |
+    Create a detailed persona for a support agent at {{company_name}}.
+    
+    Include:
+    - Experience level (junior, mid-level, senior)
+    - Support level: {{random(support_levels)}}
+    - Specialization areas related to {{random(product_names)}}
+    - Communication style (formal, empathetic, technical, etc.)
+    - Support approach and process
+    - Background knowledge and training
+    
+    Format as a JSON object with appropriate fields.

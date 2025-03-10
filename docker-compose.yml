@@ -1,0 +1,17 @@
+version: '3'
+
+services:
+  faker:
+    build: .
+    volumes:
+      - ./src:/app/src
+      - ./examples:/app/examples
+      - ./output:/app/output
+      - ${GOOGLE_APPLICATION_CREDENTIALS}:/app/credentials.json:ro
+    environment:
+      - GOOGLE_APPLICATION_CREDENTIALS=/app/credentials.json
+      - PROJECT_ID=${PROJECT_ID}
+      - LOCATION=${LOCATION}
+      - LOG_LEVEL=INFO
+      - OUTPUT_DIR=/app/output
+    command: python -m faker generate -c /app/examples/config.yaml

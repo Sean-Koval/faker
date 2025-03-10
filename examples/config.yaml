@@ -1,0 +1,70 @@
+# Example configuration for Faker
+---
+name: "customer-support-dataset"
+version: "1.0.0"
+description: "A synthetic dataset of customer support conversations"
+
+# LLM provider configuration
+llm:
+  provider: "gemini"
+  model: "gemini-1.5-pro"
+  project_id: "${PROJECT_ID}"  # Will be replaced with env var
+  location: "${LOCATION}"      # Will be replaced with env var
+
+# Dataset generation parameters
+dataset:
+  num_conversations: 50
+  formats: ["jsonl", "json"]
+  output_dir: "${OUTPUT_DIR}"  # Will be replaced with env var
+
+# Conversation parameters
+conversation:
+  roles:
+    - user
+    - support_agent
+  min_messages: 4
+  max_messages: 12
+  domains:
+    - tech_support
+    - billing
+    - account_issues
+    - product_questions
+
+# Prompt templates
+templates:
+  conversation: |
+    Generate a realistic customer support conversation between a customer and a support agent.
+    
+    Domain: {{domain}}
+    
+    The conversation should have between {{min_messages}} and {{max_messages}} total messages,
+    and should represent a complete interaction with a clear issue and resolution.
+    
+    Format the output as a JSON array with the following structure:
+    [
+      {"role": "user", "content": "..."},
+      {"role": "support_agent", "content": "..."},
+      ...
+    ]
+  
+  user_persona: |
+    Create a detailed persona for a customer contacting support.
+    
+    Include:
+    - Age
+    - Technical proficiency level (beginner, intermediate, expert)
+    - Communication style (formal, casual, frustrated, etc.)
+    - Background context that might be relevant
+    
+    Format as a short paragraph.
+  
+  support_persona: |
+    Create a detailed persona for a support agent.
+    
+    Include:
+    - Experience level (junior, mid-level, senior)
+    - Specialization areas
+    - Communication style (formal, empathetic, technical, etc.)
+    - Support approach
+    
+    Format as a short paragraph.

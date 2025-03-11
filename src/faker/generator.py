@@ -131,6 +131,8 @@ class ChatGenerator:
         output_format: str = "split",
         export_run_info: bool = True,
         logging_service=None,
+        batch_size: int = 0,  # 0 means no batching
+        max_workers: int = 5,
     ) -> Dataset:
         """Generate a dataset of synthetic conversations.
 
@@ -139,6 +141,8 @@ class ChatGenerator:
             output_format: Format to export dataset ('jsonl', 'json', 'split')
             export_run_info: Whether to export run information
             logging_service: Optional LoggingService for tracking metrics
+            batch_size: Number of conversations to generate in parallel (0 = sequential)
+            max_workers: Maximum number of parallel workers when using batching
 
         Returns:
             A Dataset object containing the generated conversations
@@ -174,27 +178,89 @@ class ChatGenerator:
         start_time = time.time()
 
         try:
-            # Generate conversations
-            conversations = []
-            for i in range(num_conversations):
-                self.logger.info(f"Generating conversation {i+1}/{num_conversations}")
+            # Determine if we should use parallel processing
+            use_parallel = (batch_size > 1) and (num_conversations > 1)
+            actual_batch_size = min(batch_size, max_workers, num_conversations) if use_parallel else 1
+            
+            # Adjust based on available libraries
+            if use_parallel:
                 try:
-                    conversation = self._generate_conversation()
-                    conversations.append(conversation)
+                    import concurrent.futures
+                    self.logger.info(f"Using parallel processing with batch size {actual_batch_size}")
+                except ImportError:
+                    use_parallel = False
+                    self.logger.warning("concurrent.futures not available, using sequential processing")
+            
+            # Generate conversations (parallel or sequential)
+            conversations = []
+            
+            if use_parallel:
+                # Process in batches to control memory usage and provide progress updates
+                for batch_start in range(0, num_conversations, actual_batch_size):
+                    batch_end = min(batch_start + actual_batch_size, num_conversations)
+                    batch_indices = list(range(batch_start, batch_end))
+                    
+                    self.logger.info(f"Generating conversations {batch_start+1}-{batch_end}/{num_conversations}")
+                    
+                    # Generate batch in parallel
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=len(batch_indices)) as executor:
+                        # Create tasks for conversation generation
+                        future_to_idx = {
+                            executor.submit(self._generate_conversation): idx 
+                            for idx in batch_indices
+                        }
+                        
+                        # Collect results as they complete
+                        batch_conversations = [None] * len(batch_indices)
+                        for future in concurrent.futures.as_completed(future_to_idx):
+                            idx = future_to_idx[future]
+                            rel_idx = idx - batch_start  # Relative index in the batch
+                            
+                            try:
+                                conversation = future.result()
+                                batch_conversations[rel_idx] = conversation
+                                
+                                # Log progress if using logging service
+                                if logging_service and run_id:
+                                    progress = (idx + 1) / num_conversations * 100
+                                    logging_service.save_custom_metric(run_id, "progress", progress)
+                                    
+                            except Exception as e:
+                                self.logger.error(f"Error generating conversation {idx+1}: {e}")
+                                if logging_service and run_id:
+                                    logging_service.save_custom_metric(
+                                        run_id,
+                                        f"error_conversation_{idx}",
+                                        {"error": str(e), "index": idx},
+                                    )
+                    
+                    # Add completed batch to conversations
+                    conversations.extend([c for c in batch_conversations if c is not None])
+                    
+                    # Log batch completion
+                    self.logger.info(f"Completed batch {batch_start+1}-{batch_end}, total: {len(conversations)}")
+            
+            else:
+                # Sequential generation
+                for i in range(num_conversations):
+                    self.logger.info(f"Generating conversation {i+1}/{num_conversations}")
+                    try:
+                        conversation = self._generate_conversation()
+                        conversations.append(conversation)
 
-                    # Log progress if using logging service
-                    if logging_service and run_id:
-                        progress = (i + 1) / num_conversations * 100
-                        logging_service.save_custom_metric(run_id, "progress", progress)
+                        # Log progress if using logging service
+                        if logging_service and run_id:
+                            progress = (i + 1) / num_conversations * 100
+                            logging_service.save_custom_metric(run_id, "progress", progress)
 
-                except Exception as e:
-                    self.logger.error(f"Error generating conversation {i+1}: {e}")
-                    if logging_service and run_id:
-                        logging_service.save_custom_metric(
-                            run_id,
-                            f"error_conversation_{i}",
-                            {"error": str(e), "index": i},
-                        )
+                    except Exception as e:
+                        self.logger.error(f"Error generating conversation {i+1}: {e}")
+                        if logging_service and run_id:
+                            logging_service.save_custom_metric(
+                                run_id,
+                                f"error_conversation_{i}",
+                                {"error": str(e), "index": i},
+                            )
 
             # Update dataset
             dataset.conversations = conversations
@@ -212,6 +278,11 @@ class ChatGenerator:
                         else 0
                     ),
                 )
+                # Add parallel processing stats
+                dataset.run_info.add_stat("used_parallel_processing", use_parallel)
+                if use_parallel:
+                    dataset.run_info.add_stat("batch_size", actual_batch_size)
+                    dataset.run_info.add_stat("num_batches", (num_conversations + actual_batch_size - 1) // actual_batch_size)
 
             # Export dataset
             if self.output_dir:
@@ -253,18 +324,28 @@ class ChatGenerator:
             raise
 
     def _generate_conversation(self) -> Conversation:
-        """Generate a single conversation.
+        """Generate a single conversation using the hybrid approach.
 
         Returns:
             A Conversation object containing messages
         """
+        # Import response parser here to avoid circular imports
+        from src.faker.response_parser import (
+            parse_llm_response, 
+            validate_conversation_messages,
+            extract_conversation_from_text
+        )
+        
         # Get conversation parameters from config
         conv_config = self.config.get("conversation", {})
         roles = conv_config.get("roles", ["user", "assistant"])
         min_messages = conv_config.get("min_messages", 4)
         max_messages = conv_config.get("max_messages", 12)
         domains = conv_config.get("domains", ["general"])
-
+        
+        # Determine if we should use the hybrid approach (default: enabled)
+        use_hybrid = conv_config.get("use_hybrid_approach", True)
+        
         # Prepare context for template rendering
         context = {
             "domain": random.choice(domains),
@@ -281,11 +362,14 @@ class ChatGenerator:
 
         # Render the conversation template
         prompt = self.template_engine.render("conversation", context)
+        
+        # Add JSON formatting instructions
+        formatted_prompt = self.template_engine.add_formatting_instructions(prompt)
 
         # Generate the conversation using the LLM
         start_time = time.time()
         result, metadata = self.llm.generate(
-            prompt,
+            formatted_prompt,
             system_prompt=system_prompt,
             temperature=conv_config.get("temperature", 0.7),
             top_p=conv_config.get("top_p", 0.95),
@@ -293,147 +377,378 @@ class ChatGenerator:
             max_tokens=conv_config.get("max_tokens", 1024),
         )
         generation_time = time.time() - start_time
-
-        # Parse the result into a structured conversation
+        
+        # Parse and validate the result
         try:
-            # Try to parse as JSON
-            parsed_data = json.loads(result)
-
-            # If the result is an array of messages
+            # Try to parse as structured data
+            parsed_data = parse_llm_response(result)
+            
+            # Process based on the structure
             if isinstance(parsed_data, list):
-                # Create speakers
-                speakers = {}
-                for role in roles:
-                    speaker_id = str(uuid.uuid4())
-                    speakers[speaker_id] = Speaker(
-                        id=speaker_id, name=role.capitalize(), role=role
-                    )
-
-                # Map role names to speaker IDs
-                role_to_speaker = {
-                    role: next(
-                        id for id, speaker in speakers.items() if speaker.role == role
-                    )
-                    for role in roles
-                }
-
-                # Create messages
-                messages = []
-                for msg_data in parsed_data:
-                    role = msg_data.get("role")
-                    content = msg_data.get("content")
-
-                    if role and content and role in role_to_speaker:
-                        message = Message(
-                            content=content,
-                            speaker_id=role_to_speaker[role],
-                            # Add additional metadata if available
-                            sentiment=msg_data.get("sentiment"),
-                            intent=msg_data.get("intent"),
-                            entities=msg_data.get("entities", []),
-                            topics=msg_data.get("topics", []),
-                            language=msg_data.get("language"),
-                            formality=msg_data.get("formality"),
-                            metadata=msg_data.get("metadata", {}),
-                        )
-                        messages.append(message)
-
-            # If result has a 'messages' field
+                # Direct list of messages - validate and clean
+                valid_messages, is_valid = validate_conversation_messages(
+                    parsed_data, required_roles=roles
+                )
+                
+                if not valid_messages:
+                    raise ValueError("No valid messages found after parsing")
+                
+                if not is_valid and use_hybrid:
+                    # If validation failed and hybrid is enabled, enhance each message
+                    valid_messages = self._enhance_messages_with_metadata(valid_messages)
+            
             elif isinstance(parsed_data, dict) and "messages" in parsed_data:
-                # Create speakers
-                speakers = {}
-                for role in roles:
-                    speaker_id = str(uuid.uuid4())
-                    speakers[speaker_id] = Speaker(
-                        id=speaker_id, name=role.capitalize(), role=role
-                    )
-
-                # Map role names to speaker IDs
-                role_to_speaker = {
-                    role: next(
-                        id for id, speaker in speakers.items() if speaker.role == role
-                    )
-                    for role in roles
-                }
-
-                # Create messages
-                messages = []
-                for msg_data in parsed_data["messages"]:
-                    role = msg_data.get("role")
-                    content = msg_data.get("content")
-
-                    if role and content and role in role_to_speaker:
-                        message = Message(
-                            content=content,
-                            speaker_id=role_to_speaker[role],
-                            # Add additional metadata if available
-                            sentiment=msg_data.get("sentiment"),
-                            intent=msg_data.get("intent"),
-                            entities=msg_data.get("entities", []),
-                            topics=msg_data.get("topics", []),
-                            language=msg_data.get("language"),
-                            formality=msg_data.get("formality"),
-                            metadata=msg_data.get("metadata", {}),
-                        )
-                        messages.append(message)
-
+                # Messages wrapped in object - validate and clean
+                valid_messages, is_valid = validate_conversation_messages(
+                    parsed_data["messages"], required_roles=roles
+                )
+                
+                if not valid_messages:
+                    raise ValueError("No valid messages found after parsing")
+                
+                if not is_valid and use_hybrid:
+                    # If validation failed and hybrid is enabled, enhance each message
+                    valid_messages = self._enhance_messages_with_metadata(valid_messages)
+            
             else:
-                # Fallback if the result is not in the expected format
-                raise ValueError(f"Unexpected result format: {result[:100]}...")
-
-        except (json.JSONDecodeError, ValueError) as e:
-            # Fallback to simple parsing if JSON parsing fails
-            self.logger.warning(f"Failed to parse result as JSON: {e}")
-            self.logger.warning(f"Result: {result[:500]}...")
-            self.logger.warning("Using simple parsing fallback")
-
-            # Try to extract a conversation using regex
-            speakers = {}
-            for role in roles:
-                speaker_id = str(uuid.uuid4())
-                speakers[speaker_id] = Speaker(
-                    id=speaker_id, name=role.capitalize(), role=role
-                )
-
-            # Create a basic conversation with alternating speakers
-            messages = []
-            speaker_cycle = [
-                id
-                for role in roles
-                for id, speaker in speakers.items()
-                if speaker.role == role
-            ]
-
-            # If no speakers found, create a default one
-            if not speaker_cycle:
-                speaker_id = str(uuid.uuid4())
-                speakers[speaker_id] = Speaker(
-                    id=speaker_id, name="Unknown", role="unknown"
-                )
-                speaker_cycle = [speaker_id]
-
-            # Split by common patterns that might indicate message boundaries
-            lines = re.split(r"\n+|(?:[A-Za-z]+:)", result)
-            lines = [line.strip() for line in lines if line.strip()]
-
-            for i, line in enumerate(lines[:max_messages]):
-                speaker_id = speaker_cycle[i % len(speaker_cycle)]
-                messages.append(Message(content=line, speaker_id=speaker_id))
-
-        # Create the conversation with the generated messages
+                # If structure doesn't match expectations, try text extraction
+                self.logger.warning(f"Unexpected result format: {result[:100]}...")
+                valid_messages = extract_conversation_from_text(result, roles, max_messages)
+                
+                if use_hybrid:
+                    # Enhance these basic messages with metadata
+                    valid_messages = self._enhance_messages_with_metadata(valid_messages)
+            
+        except (ValueError, json.JSONDecodeError) as e:
+            # Fallback to text extraction if structured parsing fails
+            self.logger.warning(f"Failed to parse result as structured data: {e}")
+            valid_messages = extract_conversation_from_text(result, roles, max_messages)
+            
+            if use_hybrid:
+                # Enhance these messages with metadata
+                valid_messages = self._enhance_messages_with_metadata(valid_messages)
+        
+        # Create speakers dictionary
+        speakers = {}
+        for role in roles:
+            speaker_id = str(uuid.uuid4())
+            speakers[speaker_id] = Speaker(
+                id=speaker_id, name=role.capitalize(), role=role
+            )
+        
+        # Map role names to speaker IDs
+        role_to_speaker = {
+            role: next(
+                id for id, speaker in speakers.items() if speaker.role == role
+            )
+            for role in roles
+        }
+        
+        # Create Message objects
+        messages = []
+        for msg_data in valid_messages:
+            role = msg_data.get("role")
+            content = msg_data.get("content")
+            
+            # Default to first role if role is invalid
+            if role not in role_to_speaker:
+                role = roles[0]
+                
+            message = Message(
+                content=content,
+                speaker_id=role_to_speaker[role],
+                # Add additional metadata if available
+                sentiment=msg_data.get("sentiment"),
+                intent=msg_data.get("intent"),
+                entities=msg_data.get("entities", []),
+                topics=msg_data.get("topics", []),
+                language=msg_data.get("language"),
+                formality=msg_data.get("formality"),
+                metadata=msg_data.get("metadata", {}),
+            )
+            messages.append(message)
+        
+        # Create the conversation object
         conversation = Conversation(
             messages=messages,
             speakers=speakers,
             domain=context.get("domain"),
             generation_config=metadata.get("generation_config", {}),
-            prompt_template=prompt,
+            prompt_template=formatted_prompt,
             prompt_variables=context,
             model_info=metadata,
             generation_time=generation_time,
         )
 
-        # Extract topics and entities if available
-        conversation.topics = list(conversation.extract_topics())
-        conversation.entities = list(conversation.extract_entities())
+        # Extract topics and entities if they're missing
+        if not conversation.topics:
+            conversation.topics = list(conversation.extract_topics())
+        if not conversation.entities:
+            conversation.entities = list(conversation.extract_entities())
 
         return conversation
+        
+    def _enhance_messages_with_metadata(self, messages: List[Dict]) -> List[Dict]:
+        """Enhance messages with metadata using additional LLM calls.
+        
+        For each message that's missing metadata, make an LLM call to 
+        generate appropriate metadata. Uses parallel processing for performance.
+        
+        Args:
+            messages: List of basic message dictionaries
+            
+        Returns:
+            Enhanced messages with metadata
+        """
+        from src.faker.response_parser import parse_llm_response
+        
+        # If no messages to enhance, return immediately
+        if not messages:
+            return []
+            
+        metadata_fields = ['sentiment', 'intent', 'entities', 'topics', 'formality']
+        
+        # Get conversation config
+        conv_config = self.config.get("conversation", {})
+        
+        # Advanced performance configuration
+        use_batch_requests = conv_config.get("use_batch_requests", True)
+        max_parallel = conv_config.get("max_parallel_enhancement", 5)
+        chunk_size = conv_config.get("batch_chunk_size", 10)  # Process messages in chunks
+        
+        # Filter messages that need enhancement
+        messages_to_enhance = []
+        message_indices = []
+        
+        for i, message in enumerate(messages):
+            missing_fields = [field for field in metadata_fields 
+                             if message.get(field) is None or 
+                             (field in ['entities', 'topics'] and not message.get(field))]
+            
+            if missing_fields:
+                message["_missing_fields"] = missing_fields
+                messages_to_enhance.append(message)
+                message_indices.append(i)
+        
+        # If no messages need enhancement, return original messages
+        if not messages_to_enhance:
+            return messages
+        
+        # Create a copy of messages to modify
+        result_messages = messages.copy()
+        
+        # Check if the LLM provider supports batch generation
+        if use_batch_requests and hasattr(self.llm, "generate_batch"):
+            # Process messages in chunks to avoid overwhelming the API
+            for i in range(0, len(messages_to_enhance), chunk_size):
+                chunk = messages_to_enhance[i:i+chunk_size]
+                chunk_indices = message_indices[i:i+chunk_size]
+                
+                # Create prompts for each message
+                prompts = [
+                    self._create_metadata_prompt(msg, msg["_missing_fields"])
+                    for msg in chunk
+                ]
+                
+                # Use the batch API with fixed parameters for all prompts
+                batch_results = self.llm.generate_batch(
+                    prompts=prompts,
+                    temperature=0.5,  # Lower temperature for consistent metadata
+                    max_tokens=256,   # Metadata needs fewer tokens
+                    max_parallel=max_parallel,
+                    use_cache=True,   # Enable caching for faster repeated runs
+                )
+                
+                # Process results
+                for j, (result_text, _) in enumerate(batch_results):
+                    msg_idx = chunk_indices[j]
+                    original_msg = messages[msg_idx]
+                    missing_fields = chunk[j]["_missing_fields"]
+                    
+                    try:
+                        # Parse the result
+                        if result_text:
+                            metadata = parse_llm_response(result_text)
+                            
+                            # Create enhanced message, combining original and new metadata
+                            enhanced_msg = original_msg.copy()
+                            
+                            # Update each missing field if provided in response
+                            for field in missing_fields:
+                                if field in metadata:
+                                    enhanced_msg[field] = metadata[field]
+                                elif field == 'entities' or field == 'topics':
+                                    enhanced_msg[field] = []
+                            
+                            # Remove temporary field
+                            if "_missing_fields" in enhanced_msg:
+                                del enhanced_msg["_missing_fields"]
+                                
+                            result_messages[msg_idx] = enhanced_msg
+                    except Exception as e:
+                        self.logger.warning(f"Failed to process batch result {j} for message {msg_idx}: {e}")
+                        # Keep original message if enhancement fails
+                        result_messages[msg_idx] = original_msg
+        
+        else:
+            # Fall back to concurrent.futures for parallel processing
+            try:
+                import concurrent.futures
+                from concurrent.futures import ThreadPoolExecutor
+                
+                # Define the enhancement function
+                def enhance_message(message, idx):
+                    try:
+                        missing_fields = message["_missing_fields"]
+                        
+                        # Create and send prompt
+                        enhancement_prompt = self._create_metadata_prompt(message, missing_fields)
+                        result, _ = self.llm.generate(
+                            enhancement_prompt,
+                            temperature=0.5,
+                            max_tokens=256,
+                            use_cache=True,  # Enable caching
+                        )
+                        
+                        # Parse response
+                        metadata = parse_llm_response(result)
+                        enhanced_msg = message.copy()
+                        
+                        # Update fields
+                        for field in missing_fields:
+                            if field in metadata:
+                                enhanced_msg[field] = metadata[field]
+                            elif field == 'entities' or field == 'topics':
+                                enhanced_msg[field] = []
+                        
+                        # Remove temporary field
+                        if "_missing_fields" in enhanced_msg:
+                            del enhanced_msg["_missing_fields"]
+                            
+                        return enhanced_msg
+                    except Exception as e:
+                        self.logger.warning(f"Failed to enhance message {idx}: {e}")
+                        if "_missing_fields" in message:
+                            del message["_missing_fields"]
+                        return message
+                
+                # Process in chunks to control memory usage
+                for i in range(0, len(messages_to_enhance), chunk_size):
+                    chunk = messages_to_enhance[i:i+chunk_size]
+                    chunk_indices = message_indices[i:i+chunk_size]
+                    
+                    # Execute in parallel with controlled concurrency
+                    with ThreadPoolExecutor(max_workers=max_parallel) as executor:
+                        # Submit jobs
+                        future_to_idx = {
+                            executor.submit(enhance_message, msg, idx): idx 
+                            for msg, idx in zip(chunk, chunk_indices)
+                        }
+                        
+                        # Collect results
+                        for future in concurrent.futures.as_completed(future_to_idx):
+                            msg_idx = future_to_idx[future]
+                            try:
+                                enhanced_msg = future.result()
+                                result_messages[msg_idx] = enhanced_msg
+                            except Exception as e:
+                                self.logger.error(f"Error in parallel message enhancement for message {msg_idx}: {e}")
+                                # Use original message on failure
+                                orig_msg = messages[msg_idx]
+                                if "_missing_fields" in orig_msg:
+                                    del orig_msg["_missing_fields"]
+                                result_messages[msg_idx] = orig_msg
+            
+            except (ImportError, Exception) as e:
+                self.logger.warning(f"Parallel processing unavailable: {e}, using sequential")
+                
+                # Sequential fallback processing
+                for i, message in enumerate(messages_to_enhance):
+                    msg_idx = message_indices[i]
+                    missing_fields = message["_missing_fields"]
+                    
+                    try:
+                        # Create prompt and generate response
+                        enhancement_prompt = self._create_metadata_prompt(message, missing_fields)
+                        result, _ = self.llm.generate(
+                            enhancement_prompt,
+                            temperature=0.5,
+                            max_tokens=256,
+                        )
+                        
+                        # Parse result
+                        metadata = parse_llm_response(result)
+                        enhanced_msg = message.copy()
+                        
+                        # Update fields
+                        for field in missing_fields:
+                            if field in metadata:
+                                enhanced_msg[field] = metadata[field]
+                            elif field == 'entities' or field == 'topics':
+                                enhanced_msg[field] = []
+                        
+                        # Remove temporary field
+                        if "_missing_fields" in enhanced_msg:
+                            del enhanced_msg["_missing_fields"]
+                            
+                        result_messages[msg_idx] = enhanced_msg
+                    except Exception as e:
+                        self.logger.warning(f"Failed to enhance message {msg_idx}: {e}")
+                        # Use original on failure
+                        orig_msg = messages[msg_idx]
+                        if "_missing_fields" in orig_msg:
+                            del orig_msg["_missing_fields"]
+                        result_messages[msg_idx] = orig_msg
+        
+        # Clean up any remaining temporary fields
+        for msg in result_messages:
+            if "_missing_fields" in msg:
+                del msg["_missing_fields"]
+                
+        return result_messages
+    
+    def _create_metadata_prompt(self, message: Dict, missing_fields: List[str]) -> str:
+        """Create a prompt for enhancing message metadata.
+        
+        Args:
+            message: The message that needs metadata enhancement
+            missing_fields: List of metadata fields to generate
+            
+        Returns:
+            A prompt string for the LLM
+        """
+        fields_text = ", ".join(missing_fields)
+        
+        prompt = f"""Analyze the following message and generate {fields_text} metadata for it.
+
+Message: "{message['content']}"
+Role: {message['role']}
+
+Generate ONLY the following fields: {fields_text}
+
+Return a JSON object with just these fields. For sentiment, use "positive", "neutral", or "negative".
+For intent, use categories like "greeting", "question", "clarification", "solution", or "farewell".
+For entities and topics, return arrays of relevant terms.
+For formality, use "formal", "casual", or "technical".
+
+Response format example:
+{{
+  "sentiment": "neutral",
+  "intent": "question",
+  "entities": ["product name", "error code"],
+  "topics": ["technical support", "login issue"],
+  "formality": "formal"
+}}
+
+Only include the fields requested: {fields_text}
+"""
+        
+        # Add formatting instructions
+        formatted_prompt = f"""
+{prompt}
+
+IMPORTANT: Your response must be a valid JSON object containing ONLY the requested fields: {fields_text}.
+No other text, explanations, or markdown formatting should be included.
+"""
+        
+        return formatted_prompt

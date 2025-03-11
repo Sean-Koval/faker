@@ -15,6 +15,8 @@ from enum import Enum
 from functools import lru_cache
 from typing import (Any, ClassVar, Dict, List, Optional, Protocol, Tuple, Type,
                     Union)
+import threading
+from datetime import datetime, timedelta
 
 # Vertex AI imports
 import vertexai
@@ -53,6 +55,14 @@ try:
     HAS_IMAGE_SUPPORT = True
 except ImportError:
     HAS_IMAGE_SUPPORT = False
+
+# Try to import additional packages for concurrency
+try:
+    import concurrent.futures
+    from concurrent.futures import ThreadPoolExecutor
+    HAS_CONCURRENT_FUTURES = True
+except ImportError:
+    HAS_CONCURRENT_FUTURES = False
 
 
 class GenerationParameters:
@@ -187,10 +197,126 @@ class ProviderType(str, Enum):
     CUSTOM = "custom"
 
 
+class RateLimiter:
+    """Rate limiter for API calls to prevent exceeding quotas."""
+    
+    def __init__(self, calls_per_minute: int = 60, max_parallel: int = 10):
+        """Initialize rate limiter.
+        
+        Args:
+            calls_per_minute: Maximum number of calls allowed per minute
+            max_parallel: Maximum number of parallel requests allowed
+        """
+        self.calls_per_minute = calls_per_minute
+        self.max_parallel = max_parallel
+        self.call_timestamps = []
+        self.lock = threading.RLock()
+        self.semaphore = threading.Semaphore(max_parallel)
+        
+    def wait_if_needed(self) -> None:
+        """Wait if rate limit would be exceeded."""
+        with self.lock:
+            now = datetime.now()
+            
+            # Remove timestamps older than 1 minute
+            self.call_timestamps = [
+                ts for ts in self.call_timestamps 
+                if now - ts < timedelta(minutes=1)
+            ]
+            
+            # Check if we're at the rate limit
+            if len(self.call_timestamps) >= self.calls_per_minute:
+                # Calculate required wait time 
+                oldest = min(self.call_timestamps)
+                wait_time = (oldest + timedelta(minutes=1) - now).total_seconds()
+                if wait_time > 0:
+                    time.sleep(wait_time)
+                    
+                    # Clear outdated timestamps after waiting
+                    now = datetime.now()
+                    self.call_timestamps = [
+                        ts for ts in self.call_timestamps 
+                        if now - ts < timedelta(minutes=1)
+                    ]
+            
+            # Record this call
+            self.call_timestamps.append(now)
+    
+    def acquire(self) -> None:
+        """Acquire permission to make an API call."""
+        self.semaphore.acquire()
+        self.wait_if_needed()
+    
+    def release(self) -> None:
+        """Release the semaphore after making an API call."""
+        self.semaphore.release()
+        
+    def __enter__(self):
+        self.acquire()
+        return self
+        
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.release()
+
+
+class ResponseCache:
+    """Cache for LLM responses to avoid duplicate calls."""
+    
+    def __init__(self, max_size: int = 1000):
+        """Initialize response cache.
+        
+        Args:
+            max_size: Maximum number of responses to cache
+        """
+        self.cache = {}  # Dict mapping prompt -> (response, metadata)
+        self.max_size = max_size
+        self.lock = threading.RLock()
+        
+    def get(self, key: str) -> Optional[Tuple[str, Dict[str, Any]]]:
+        """Get a cached response.
+        
+        Args:
+            key: Cache key (typically a hash of prompt and params)
+            
+        Returns:
+            Tuple of (response, metadata) if cached, None otherwise
+        """
+        with self.lock:
+            return self.cache.get(key)
+    
+    def put(self, key: str, value: Tuple[str, Dict[str, Any]]) -> None:
+        """Add a response to the cache.
+        
+        Args:
+            key: Cache key (typically a hash of prompt and params)
+            value: Tuple of (response, metadata) to cache
+        """
+        with self.lock:
+            # Remove oldest entries if cache is full
+            if len(self.cache) >= self.max_size:
+                # Remove a random 10% of entries when cache is full
+                keys_to_remove = list(self.cache.keys())[:self.max_size // 10]
+                for k in keys_to_remove:
+                    self.cache.pop(k, None)
+            
+            self.cache[key] = value
+
+
 class LLMProvider(ABC):
     """Base abstract class for LLM providers."""
 
     provider_type: ClassVar[ProviderType]
+    
+    def __init__(self):
+        """Initialize the provider with performance optimizations."""
+        # Default rate limiter (can be overridden by subclasses)
+        self.rate_limiter = RateLimiter()
+        
+        # Response cache
+        self.response_cache = ResponseCache()
+        
+        # Flag to enable/disable caching
+        self.use_cache = True
 
     @abstractmethod
     def generate(
@@ -199,6 +325,7 @@ class LLMProvider(ABC):
         system_prompt: Optional[str] = None,
         parameters: Optional[GenerationParameters] = None,
         retry_on_error: bool = True,
+        use_cache: bool = True,
         **kwargs,
     ) -> Tuple[str, Dict[str, Any]]:
         """Generate a completion for the given prompt.
@@ -208,12 +335,71 @@ class LLMProvider(ABC):
             system_prompt: Optional system prompt/instructions
             parameters: Generation parameters to use
             retry_on_error: Whether to retry on transient errors
+            use_cache: Whether to use response caching
             **kwargs: Additional parameters for generation
 
         Returns:
             A tuple containing (generated_text, response_metadata)
         """
         pass
+    
+    def generate_batch(
+        self, 
+        prompts: List[str],
+        system_prompt: Optional[str] = None,
+        parameters: Optional[GenerationParameters] = None,
+        max_parallel: int = 5,
+        **kwargs
+    ) -> List[Tuple[str, Dict[str, Any]]]:
+        """Generate multiple completions in parallel.
+        
+        Args:
+            prompts: List of prompts to send to the LLM
+            system_prompt: Optional system prompt/instructions for all prompts
+            parameters: Generation parameters to use
+            max_parallel: Maximum number of parallel requests
+            **kwargs: Additional parameters for generation
+            
+        Returns:
+            List of tuples containing (generated_text, response_metadata)
+        """
+        if not HAS_CONCURRENT_FUTURES:
+            # Fall back to sequential processing
+            return [
+                self.generate(prompt, system_prompt, parameters, **kwargs)
+                for prompt in prompts
+            ]
+        
+        results = [None] * len(prompts)
+        
+        # Use a smaller thread pool than max_parallel
+        with ThreadPoolExecutor(max_workers=min(max_parallel, len(prompts))) as executor:
+            # Submit all jobs
+            future_to_idx = {
+                executor.submit(
+                    self.generate, 
+                    prompt, 
+                    system_prompt, 
+                    parameters,
+                    **kwargs
+                ): i 
+                for i, prompt in enumerate(prompts)
+            }
+            
+            # Collect results, maintaining original order
+            for future in concurrent.futures.as_completed(future_to_idx):
+                idx = future_to_idx[future]
+                try:
+                    results[idx] = future.result()
+                except Exception as e:
+                    # Return error information in metadata
+                    error_metadata = {
+                        "error": str(e),
+                        "error_type": type(e).__name__,
+                    }
+                    results[idx] = ("", error_metadata)
+        
+        return results
 
     @abstractmethod
     def get_model_info(self) -> Dict[str, Any]:
@@ -228,6 +414,32 @@ class LLMProvider(ABC):
     def provider_name(self) -> str:
         """Get the provider name."""
         return self.provider_type.value
+        
+    def _get_cache_key(
+        self, 
+        prompt: str, 
+        system_prompt: Optional[str], 
+        parameters: Optional[Dict[str, Any]]
+    ) -> str:
+        """Generate a cache key for the given input parameters.
+        
+        Args:
+            prompt: The prompt to send to the LLM
+            system_prompt: Optional system prompt/instructions
+            parameters: Generation parameters
+            
+        Returns:
+            A string key for caching
+        """
+        # Create a stable representation of the parameters
+        key_parts = [
+            prompt,
+            system_prompt or "",
+            json.dumps(parameters or {}, sort_keys=True)
+        ]
+        
+        # Simple hash function, could replace with more sophisticated hash
+        return str(hash("".join(key_parts)))
 
 
 # Registry of provider types to provider classes
@@ -268,6 +480,10 @@ class VertexAIProvider(LLMProvider):
         timeout: float = 300.0,
         max_retries: int = 3,
         vertex_endpoint: Optional[str] = None,
+        calls_per_minute: int = 60,
+        max_parallel_calls: int = 10,
+        use_cache: bool = True,
+        cache_size: int = 1000,
     ):
         """Initialize the Vertex AI provider.
 
@@ -280,7 +496,14 @@ class VertexAIProvider(LLMProvider):
             timeout: Timeout for requests in seconds
             max_retries: Maximum number of retries for failed requests
             vertex_endpoint: Optional custom Vertex AI endpoint
+            calls_per_minute: Maximum API calls per minute (rate limit)
+            max_parallel_calls: Maximum parallel API calls allowed
+            use_cache: Whether to enable response caching
+            cache_size: Maximum size of response cache
         """
+        # Initialize base class
+        super().__init__()
+        
         self.logger = logging.getLogger(__name__)
 
         # Load from environment variables if not provided
@@ -297,6 +520,14 @@ class VertexAIProvider(LLMProvider):
         self.timeout = timeout
         self.max_retries = max_retries
         self._model_info: Optional[Dict[str, Any]] = None
+        
+        # Performance optimization settings
+        self.rate_limiter = RateLimiter(
+            calls_per_minute=calls_per_minute, 
+            max_parallel=max_parallel_calls
+        )
+        self.response_cache = ResponseCache(max_size=cache_size)
+        self.use_cache = use_cache
 
         if not self.project_id:
             raise ValueError(
@@ -359,24 +590,41 @@ class VertexAIProvider(LLMProvider):
         """
         params = parameters or self.default_parameters
 
-        # Map our parameters to Vertex AI's GenerationConfig
-        config_kwargs = {
-            "temperature": params.temperature,
-            "top_p": params.top_p,
-            "top_k": params.top_k,
-            "max_output_tokens": params.max_tokens,
-            "candidate_count": params.candidate_count,
-        }
+        # Create a cleaner set of parameters - only include parameters that are actually
+        # supported by the current version of the Vertex AI SDK
+        config_kwargs = {}
+        
+        # Try adding each parameter with error handling
+        try:
+            config = GenerationConfig()
+            
+            # Test if each attribute exists on the GenerationConfig class
+            # Only add parameters that are supported
+            for key, value in {
+                "temperature": params.temperature,
+                "top_p": params.top_p,
+                "top_k": params.top_k,
+                "max_output_tokens": params.max_tokens,
+                "candidate_count": params.candidate_count,
+            }.items():
+                if hasattr(GenerationConfig, key):
+                    config_kwargs[key] = value
+            
+            # Add stop sequences if provided and supported
+            if params.stop_sequences and hasattr(GenerationConfig, "stop_sequences"):
+                config_kwargs["stop_sequences"] = list(params.stop_sequences)
 
-        # Add stop sequences if provided
-        if params.stop_sequences:
-            config_kwargs["stop_sequences"] = list(params.stop_sequences)
-
-        # Set random seed if provided for reproducibility
-        if params.random_seed is not None:
-            config_kwargs["random_seed"] = params.random_seed
-
-        return GenerationConfig(**config_kwargs)
+            # Set random seed if provided and supported
+            if params.random_seed is not None and hasattr(GenerationConfig, "random_seed"):
+                config_kwargs["random_seed"] = params.random_seed
+                
+            self.logger.debug(f"Using generation config parameters: {config_kwargs}")
+            
+            return GenerationConfig(**config_kwargs)
+        except Exception as e:
+            self.logger.warning(f"Error creating generation config with parameters {config_kwargs}: {e}")
+            self.logger.warning("Falling back to default GenerationConfig")
+            return GenerationConfig()
 
     def generate(
         self,
@@ -384,6 +632,7 @@ class VertexAIProvider(LLMProvider):
         system_prompt: Optional[str] = None,
         parameters: Optional[GenerationParameters] = None,
         retry_on_error: bool = True,
+        use_cache: bool = True,
         **kwargs,
     ) -> Tuple[str, Dict[str, Any]]:
         """Generate a response using Vertex AI.
@@ -393,6 +642,7 @@ class VertexAIProvider(LLMProvider):
             system_prompt: Optional system prompt/instructions
             parameters: Generation parameters to use
             retry_on_error: Whether to retry on transient errors
+            use_cache: Whether to use response caching
             **kwargs: Additional parameters to pass to the model
 
         Returns:
@@ -427,6 +677,21 @@ class VertexAIProvider(LLMProvider):
 
         # Create the generation config
         generation_config = self._create_generation_config(parameters)
+        
+        # Check cache if enabled
+        cache_hit = False
+        if self.use_cache and use_cache:
+            cache_key = self._get_cache_key(prompt, system_prompt, parameters.to_dict())
+            cached_response = self.response_cache.get(cache_key)
+            
+            if cached_response:
+                self.logger.debug(f"Cache hit for prompt: {prompt[:50]}...")
+                result, metadata = cached_response
+                
+                # Add cache hit info to metadata
+                metadata["cache_hit"] = True
+                
+                return result, metadata
 
         # Apply retry logic if enabled and libraries are available
         generate_func = (
@@ -435,26 +700,33 @@ class VertexAIProvider(LLMProvider):
             else self._generate
         )
 
-        # Generate response and handle errors
+        # Generate response with rate limiting
         try:
-            # Track timing
-            start_time = time.time()
+            # Acquire rate limiter
+            with self.rate_limiter:
+                # Track timing
+                start_time = time.time()
 
-            # Generate response
-            result, response_obj = generate_func(
-                prompt, system_prompt, generation_config
-            )
+                # Generate response
+                result, response_obj = generate_func(
+                    prompt, system_prompt, generation_config
+                )
 
-            # Calculate generation time
-            generation_time = time.time() - start_time
+                # Calculate generation time
+                generation_time = time.time() - start_time
 
-            # Collect metadata
-            metadata = self._create_metadata(
-                generation_config, generation_time, response_obj
-            )
+                # Collect metadata
+                metadata = self._create_metadata(
+                    generation_config, generation_time, response_obj
+                )
+                
+                # Cache the result if enabled
+                if self.use_cache and use_cache:
+                    cache_key = self._get_cache_key(prompt, system_prompt, parameters.to_dict())
+                    self.response_cache.put(cache_key, (result, metadata))
 
-            self.logger.debug(f"Received response from {self.model}: {result[:100]}...")
-            return result, metadata
+                self.logger.debug(f"Received response from {self.model}: {result[:100]}...")
+                return result, metadata
 
         except Exception as e:
             self.logger.error(f"Error generating response: {str(e)}")
@@ -465,14 +737,22 @@ class VertexAIProvider(LLMProvider):
                 "provider": self.provider_name,
                 "error": str(e),
                 "error_type": type(e).__name__,
-                "generation_config": {
-                    "temperature": generation_config.temperature,
-                    "top_p": generation_config.top_p,
-                    "top_k": generation_config.top_k,
-                    "max_tokens": generation_config.max_output_tokens,
-                },
+                "generation_config": {},  # Empty dict in case attributes don't exist
                 "prompt_length": len(prompt),
             }
+            
+            # Try to safely extract config parameters
+            try:
+                if hasattr(generation_config, "temperature"):
+                    error_metadata["generation_config"]["temperature"] = generation_config.temperature
+                if hasattr(generation_config, "top_p"):
+                    error_metadata["generation_config"]["top_p"] = generation_config.top_p
+                if hasattr(generation_config, "top_k"):
+                    error_metadata["generation_config"]["top_k"] = generation_config.top_k
+                if hasattr(generation_config, "max_output_tokens"):
+                    error_metadata["generation_config"]["max_tokens"] = generation_config.max_output_tokens
+            except Exception as config_err:
+                self.logger.warning(f"Failed to extract generation config for error metadata: {config_err}")
 
             # Re-raise the exception
             raise
@@ -494,9 +774,12 @@ class VertexAIProvider(LLMProvider):
             A tuple containing (generated_text, response_object)
         """
         if system_prompt:
-            # Create chat with system instructions
-            chat = self.client.start_chat(system_instructions=system_prompt)
-            response = chat.send_message(prompt, generation_config=generation_config)
+            # For models that don't support system_instructions directly,
+            # prepend it to the prompt
+            full_prompt = f"System: {system_prompt}\n\nUser: {prompt}"
+            response = self.client.generate_content(
+                full_prompt, generation_config=generation_config
+            )
         else:
             # Generate response without system prompt
             response = self.client.generate_content(
@@ -560,13 +843,23 @@ class VertexAIProvider(LLMProvider):
             "model": self.model,
             "provider": self.provider_name,
             "generation_time": generation_time,
-            "generation_config": {
-                "temperature": generation_config.temperature,
-                "top_p": generation_config.top_p,
-                "top_k": generation_config.top_k,
-                "max_tokens": generation_config.max_output_tokens,
-            },
+            "generation_config": {},
         }
+        
+        # Safely extract generation config parameters
+        try:
+            config_dict = {}
+            if hasattr(generation_config, "temperature"):
+                config_dict["temperature"] = generation_config.temperature
+            if hasattr(generation_config, "top_p"):
+                config_dict["top_p"] = generation_config.top_p
+            if hasattr(generation_config, "top_k"):
+                config_dict["top_k"] = generation_config.top_k
+            if hasattr(generation_config, "max_output_tokens"):
+                config_dict["max_tokens"] = generation_config.max_output_tokens
+            metadata["generation_config"] = config_dict
+        except Exception as e:
+            self.logger.warning(f"Failed to extract generation config for metadata: {e}")
 
         # Add usage information if available
         if hasattr(response_obj, "usage_metadata"):

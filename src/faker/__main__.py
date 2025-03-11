@@ -77,6 +77,20 @@ def parse_args():
         help="Number of conversations to generate (overrides config)",
     )
     generate_parser.add_argument(
+        "-b",
+        "--batch-size",
+        type=int,
+        default=0,
+        help="Number of conversations to generate in parallel (0 for sequential)",
+    )
+    generate_parser.add_argument(
+        "-w",
+        "--max-workers",
+        type=int,
+        default=5,
+        help="Maximum number of parallel workers",
+    )
+    generate_parser.add_argument(
         "-o", "--output-dir", help="Output directory (overrides config)"
     )
     generate_parser.add_argument(
@@ -470,6 +484,8 @@ def main():
                 output_format=args.format,
                 export_run_info=not args.no_export_run_info,
                 logging_service=logging_service,
+                batch_size=args.batch_size,
+                max_workers=args.max_workers,
             )
 
             # Report total time

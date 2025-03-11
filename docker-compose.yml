@@ -1,5 +1,3 @@
-version: '3'
-
 services:
   faker:
     build: .
@@ -14,4 +12,5 @@ services:
       - LOCATION=${LOCATION}
       - LOG_LEVEL=INFO
       - OUTPUT_DIR=/app/output
-    command: python -m faker generate -c /app/examples/config.yaml
+      - PYTHONPATH=/app
+    command: python -m src.faker generate -c /app/examples/config.yaml

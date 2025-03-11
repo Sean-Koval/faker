@@ -11,7 +11,7 @@ tags:
 # LLM provider configuration
 llm:
   provider: "gemini"
-  model: "gemini-1.5-pro"
+  model: "gemini-1.5-flash-002"
   project_id: "${PROJECT_ID}"         # Will be replaced with env var
   location: "${LOCATION}"             # Will be replaced with env var
   credentials_path: "${GOOGLE_APPLICATION_CREDENTIALS}"  # Service account credentials
@@ -24,7 +24,7 @@ llm:
 
 # Dataset generation parameters
 dataset:
-  num_conversations: 50
+  num_conversations: 5
   formats: ["split", "json", "jsonl"]  # List of output formats to generate
   output_dir: "${OUTPUT_DIR}"          # Will be replaced with env var
 
@@ -41,8 +41,23 @@ conversation:
     - account_issues
     - product_questions
   
+  # Generation approach parameters
+  use_hybrid_approach: true       # Enable hybrid approach for better quality
+  parallel_enhancement: true      # Enable parallel metadata enhancement
+  max_parallel_enhancement: 5     # Maximum concurrent enhancement requests
+  use_batch_requests: true        # Use batch requests for message enhancement
+  batch_chunk_size: 10            # Number of messages to process in one batch
+  
+  # Rate limiting and performance parameters
+  calls_per_minute: 60            # Maximum API calls per minute (rate limit)
+  max_parallel_calls: 10          # Maximum parallel API calls allowed
+  
+  # Caching parameters
+  use_cache: true                 # Enable response caching
+  cache_size: 1000                # Maximum size of response cache
+  
   # Generation parameters specific to conversations (overrides llm section)
-  temperature: 0.8   # Higher temperature for more diverse outputs
+  temperature: 0.8                # Higher temperature for more diverse outputs
   
   # Additional variables to use in templates
   variables:

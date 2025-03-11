@@ -22,4 +22,4 @@ ENV PYTHONPATH=/app
 ENV PYTHONUNBUFFERED=1
 
 # Command to run when container starts
-CMD ["python", "-m", "faker"]
+CMD ["python", "-m", "src.faker"]

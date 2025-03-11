@@ -8,7 +8,7 @@ import os
 import sys
 from typing import Any, Dict, List, Optional, Tuple, Union
 
-from faker.logging_service import JSONLogStore, LoggingService, SQLiteLogStore
+from src.faker.logging_service import JSONLogStore, LoggingService, SQLiteLogStore
 
 
 def setup_logging_commands(subparsers):

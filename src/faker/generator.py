@@ -13,9 +13,9 @@ from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
 import yaml
 
-from faker.llm import GeminiProvider, LLMProvider, MockProvider
-from faker.models import Conversation, Dataset, Message, RunInfo, Speaker
-from faker.templates import TemplateEngine
+from src.faker.llm import GeminiProvider, LLMProvider, MockProvider
+from src.faker.models import Conversation, Dataset, Message, RunInfo, Speaker
+from src.faker.templates import TemplateEngine
 
 
 class ChatGenerator:
@@ -428,21 +428,129 @@ class ChatGenerator:
                 # Enhance these messages with metadata
                 valid_messages = self._enhance_messages_with_metadata(valid_messages)
         
-        # Create speakers dictionary
+        # Check if we have predefined speakers in the config
+        predefined_speakers = conv_config.get("speakers", {})
         speakers = {}
-        for role in roles:
-            speaker_id = str(uuid.uuid4())
-            speakers[speaker_id] = Speaker(
-                id=speaker_id, name=role.capitalize(), role=role
-            )
+        role_to_speaker = {}
         
-        # Map role names to speaker IDs
-        role_to_speaker = {
-            role: next(
-                id for id, speaker in speakers.items() if speaker.role == role
-            )
-            for role in roles
-        }
+        # Investment advisor-client conversation
+        if predefined_speakers and "advisors" in predefined_speakers and "clients" in predefined_speakers:
+            # We have predefined speakers - select one advisor and one client
+            advisors = predefined_speakers.get("advisors", [])
+            clients = predefined_speakers.get("clients", [])
+            
+            # Select a random advisor and client
+            selected_advisor = random.choice(advisors) if advisors else None
+            selected_client = random.choice(clients) if clients else None
+            
+            # Use the predefined speakers if available
+            if selected_advisor and "advisor" in roles:
+                advisor_id = selected_advisor.get("id")
+                advisor_name = selected_advisor.get("name")
+                advisor_metadata = selected_advisor.get("metadata", {})
+                
+                # Add to speaker dictionary
+                speakers[advisor_id] = Speaker(
+                    id=advisor_id,
+                    name=advisor_name,
+                    role="advisor",
+                    metadata=advisor_metadata
+                )
+                
+                # Map role to speaker ID
+                role_to_speaker["advisor"] = advisor_id
+                
+                # Add advisor info to context for template rendering
+                context["advisor_id"] = advisor_id
+                context["advisor_name"] = advisor_name
+            
+            if selected_client and "client" in roles:
+                client_id = selected_client.get("id")
+                client_name = selected_client.get("name")
+                client_metadata = selected_client.get("metadata", {})
+                
+                # Add to speaker dictionary
+                speakers[client_id] = Speaker(
+                    id=client_id,
+                    name=client_name,
+                    role="client",
+                    metadata=client_metadata
+                )
+                
+                # Map role to speaker ID
+                role_to_speaker["client"] = client_id
+                
+                # Add client info to context for template rendering
+                context["client_id"] = client_id
+                context["client_name"] = client_name
+        
+        # Customer support conversation
+        elif predefined_speakers and "support_agents" in predefined_speakers and "users" in predefined_speakers:
+            # We have predefined speakers - select one support agent and one user
+            support_agents = predefined_speakers.get("support_agents", [])
+            users = predefined_speakers.get("users", [])
+            
+            # Select a random support agent and user
+            selected_agent = random.choice(support_agents) if support_agents else None
+            selected_user = random.choice(users) if users else None
+            
+            # Use the predefined speakers if available
+            if selected_agent and "support_agent" in roles:
+                agent_id = selected_agent.get("id")
+                agent_name = selected_agent.get("name")
+                agent_metadata = selected_agent.get("metadata", {})
+                
+                # Add to speaker dictionary
+                speakers[agent_id] = Speaker(
+                    id=agent_id,
+                    name=agent_name,
+                    role="support_agent",
+                    metadata=agent_metadata
+                )
+                
+                # Map role to speaker ID
+                role_to_speaker["support_agent"] = agent_id
+                
+                # Add agent info to context for template rendering
+                context["agent_id"] = agent_id
+                context["agent_name"] = agent_name
+            
+            if selected_user and "user" in roles:
+                user_id = selected_user.get("id")
+                user_name = selected_user.get("name")
+                user_metadata = selected_user.get("metadata", {})
+                
+                # Add to speaker dictionary
+                speakers[user_id] = Speaker(
+                    id=user_id,
+                    name=user_name,
+                    role="user",
+                    metadata=user_metadata
+                )
+                
+                # Map role to speaker ID
+                role_to_speaker["user"] = user_id
+                
+                # Add user info to context for template rendering
+                context["user_id"] = user_id
+                context["user_name"] = user_name
+        
+        # For any roles that don't have predefined speakers, create them dynamically
+        for role in roles:
+            if role not in role_to_speaker:
+                speaker_id = str(uuid.uuid4())
+                speakers[speaker_id] = Speaker(
+                    id=speaker_id, name=role.capitalize(), role=role
+                )
+                role_to_speaker[role] = speaker_id
+                
+                # Add dynamic speaker info to context
+                if role == "advisor":
+                    context["advisor_id"] = speaker_id
+                    context["advisor_name"] = "Advisor"
+                elif role == "client":
+                    context["client_id"] = speaker_id
+                    context["client_name"] = "Client"
         
         # Create Message objects
         messages = []

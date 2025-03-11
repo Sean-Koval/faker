@@ -14,7 +14,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Union
 
-from faker.models import Conversation, Dataset, RunInfo
+from src.faker.models import Conversation, Dataset, RunInfo
 
 
 class LogStore:

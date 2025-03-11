@@ -11,9 +11,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from faker import ChatGenerator, Dataset
-from faker.commands import handle_logging_command, setup_logging_commands
-from faker.logging_service import JSONLogStore, LoggingService, SQLiteLogStore
+from src.faker import ChatGenerator, Dataset
+from src.faker.commands import handle_logging_command, setup_logging_commands
+from src.faker.logging_service import JSONLogStore, LoggingService, SQLiteLogStore
 
 
 def setup_logging(level=logging.INFO, log_file=None):

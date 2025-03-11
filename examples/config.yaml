@@ -1,12 +1,14 @@
-# Example configuration for Faker
+# Configuration for Faker to generate investment advisor-client conversations
 ---
-name: "customer-support-dataset"
+name: "investment-advisor-client-dataset"
 version: "1.0.0"
-description: "A synthetic dataset of customer support conversations"
+description: "A synthetic dataset of conversations between investment advisors and clients"
 tags:
-  - customer_support
+  - investment_advisory
+  - finance
   - synthetic_data
   - conversation
+  - entity_tagging
 
 # LLM provider configuration
 llm:
@@ -15,7 +17,7 @@ llm:
   project_id: "${PROJECT_ID}"         # Will be replaced with env var
   location: "${LOCATION}"             # Will be replaced with env var
   credentials_path: "${GOOGLE_APPLICATION_CREDENTIALS}"  # Service account credentials
-  
+
   # Generation parameters (can be overridden in conversation section)
   temperature: 0.7
   top_p: 0.95
@@ -24,89 +26,144 @@ llm:
 
 # Dataset generation parameters
 dataset:
-  num_conversations: 5
+  num_conversations: 100  # Increased number of conversations
   formats: ["split", "json", "jsonl"]  # List of output formats to generate
   output_dir: "${OUTPUT_DIR}"          # Will be replaced with env var
 
 # Conversation parameters
 conversation:
   roles:
-    - user
-    - support_agent
-  min_messages: 4
-  max_messages: 12
+    - client
+    - advisor
+  min_messages: 2  # Shorter conversations
+  max_messages: 15 # More long conversations
   domains:
-    - tech_support
-    - billing
-    - account_issues
-    - product_questions
+    - market_news
+    - trade_discussion
+    - deal_discussion
+    - market_analysis
+    - portfolio_review
+    
+  # Predefined speakers with custom IDs
+  speakers:
+    advisors:
+      - id: "advisor_1"
+        name: "John Smith"
+        role: "advisor"
+        metadata: 
+          experience: "senior"
+          specialty: "retirement planning"
+      - id: "advisor_2"
+        name: "Sarah Johnson"
+        role: "advisor"
+        metadata:
+          experience: "mid-level"
+          specialty: "growth stocks"
+    clients:
+      - id: "client_1"
+        name: "Michael Brown"
+        role: "client"
+        metadata:
+          risk_tolerance: "moderate"
+          investment_goal: "retirement"
+      - id: "client_2"
+        name: "Emily Wilson"
+        role: "client"
+        metadata:
+          risk_tolerance: "aggressive"
+          investment_goal: "growth"
   
   # Generation approach parameters
   use_hybrid_approach: true       # Enable hybrid approach for better quality
   parallel_enhancement: true      # Enable parallel metadata enhancement
-  max_parallel_enhancement: 5     # Maximum concurrent enhancement requests
+  max_parallel_enhancement: 10    # Increased for more performance
   use_batch_requests: true        # Use batch requests for message enhancement
-  batch_chunk_size: 10            # Number of messages to process in one batch
-  
+  batch_chunk_size: 20           # Increased for more performance
+
   # Rate limiting and performance parameters
-  calls_per_minute: 60            # Maximum API calls per minute (rate limit)
-  max_parallel_calls: 10          # Maximum parallel API calls allowed
-  
+  calls_per_minute: 120           # Increased API calls per minute (rate limit)
+  max_parallel_calls: 20          # Increased parallel API calls allowed
+
   # Caching parameters
   use_cache: true                 # Enable response caching
-  cache_size: 1000                # Maximum size of response cache
+  cache_size: 2000                # Increased cache size
   
   # Generation parameters specific to conversations (overrides llm section)
-  temperature: 0.8                # Higher temperature for more diverse outputs
+  temperature: 0.9                # Higher temperature for more diverse outputs
   
   # Additional variables to use in templates
   variables:
-    company_name: "TechCorp Inc."
-    product_names: 
-      - "CloudServer Pro"
-      - "SecureVPN"
-      - "DataSync"
-      - "MobileGuard"
-    customer_types:
-      - "individual"
-      - "small_business"
-      - "enterprise"
-    support_levels:
-      - "tier_1"
-      - "tier_2"
-      - "tier_3"
+    advisor_firm: "Stonks & Co."
+    tickers:
+      - "AAPL"
+      - "MSFT"
+      - "GOOG"
+      - "AMZN"
+      - "TSLA"
+      - "NVDA"
+      - "JPM"
+      - "BAC"
+      - "WFC"
+      - "PYPL"
+      - "SQ"
+      - "COIN"
+      - "GME"
+      - "AMC"
+      - "SPY"
+    market_sectors:
+      - "Technology"
+      - "Finance"
+      - "Healthcare"
+      - "Consumer Goods"
+      - "Energy"
+      - "Real Estate"
+      - "Industrial"
+    investment_styles:
+      - "growth"
+      - "value"
+      - "income"
+      - "dividend"
+      - "index"
+    client_experience_levels:
+        - "novice"
+        - "intermediate"
+        - "experienced"
 
 # Prompt templates
 templates:
   # System prompt to control generation (optional)
   system_prompt: |
-    You are an expert in generating realistic conversational data for training AI systems.
+    You are an expert in generating realistic conversational data between investment advisors and clients.
     Your task is to create authentic-sounding conversations that include all the requested metadata.
-    The content should be diverse but always professional and inoffensive.
+    The conversations should include diverse topics such as market news, trade discussions, and formal market analysis.
+    The content should be diverse, but always professional and inoffensive.
+    The conversations should also range in formality, and length (short and informal vs long and formal).
+    The entities and topics should also be relevant to the financial industry.
 
   # Main conversation generation template
   conversation: |
-    Generate a realistic customer support conversation between a customer and a support agent for {{company_name}}.
-    
+    Generate a realistic conversation between an investment advisor and a client for {{advisor_firm}}.
+
+    Advisor: {{advisor_name}} ({{advisor_id}})
+    Client: {{client_name}} ({{client_id}})
     Domain: {{domain}}
-    Product: {{random(product_names)}}
-    Customer Type: {{random(customer_types)}}
-    Support Level: {{random(support_levels)}}
+    Investment Style: {{random(investment_styles)}}
+    Client Experience Level: {{random(client_experience_levels)}}
     
-    The conversation should have between {{min_messages}} and {{max_messages}} total messages,
-    and should represent a complete interaction with a clear issue and resolution.
+    The conversation should have between {{min_messages}} and {{max_messages}} total messages.
+    The conversation may be short and informal or long and formal.
     
     For each message, include the following metadata:
     - sentiment (positive, neutral, negative)
-    - intent (e.g., greeting, question, clarification, solution, farewell)
-    - entities (list of important named entities mentioned, like product names, technical terms)
-    - topics (list of topics discussed in the message)
+    - intent (e.g., greeting, question, clarification, recommendation, update, agreement, closing)
+    - entities (list of important named entities mentioned, like tickers, company names, market sectors)
+    - topics (list of topics discussed in the message, such as general market news, specific stock news, deals, and formal analysis)
     - formality (formal, casual, technical)
     
     Format the output as a JSON array with the following structure:
     [
       {
-        "role": "user",
+        "role": "client",
         "content": "...",
         "sentiment": "...",
         "intent": "...",
@@ -115,7 +172,7 @@ templates:
         "formality": "..."
       },
       {
-        "role": "support_agent",
+        "role": "advisor",
         "content": "...",
         "sentiment": "...",
         "intent": "...",
@@ -125,30 +182,32 @@ templates:
       },
       ...
     ]
-  
-  # Additional templates for generating personas
-  user_persona: |
-    Create a detailed persona for a customer contacting support at {{company_name}}.
     
+    IMPORTANT: Use the advisor and client names in the conversation. Make the conversation personalized
+    for these specific individuals and refer to them by name occasionally in the messages.
+
+  # Additional templates for generating personas (optional)
+  client_persona: |
+    Create a detailed persona for a client receiving investment advice at {{advisor_firm}}.
+
     Include:
     - Age and demographic information
-    - Technical proficiency level (beginner, intermediate, expert)
-    - Communication style (formal, casual, frustrated, etc.)
-    - Customer type: {{random(customer_types)}}
-    - Background context that might be relevant
-    - Reason for contacting support related to {{random(product_names)}}
-    
+    - Risk tolerance (low, medium, high)
+    - Investment goals (retirement, growth, income)
+    - Client experience level: {{random(client_experience_levels)}}
+    - Preferred communication style (formal, casual, technical)
+    - Background and profession (if relevant)
+
     Format as a JSON object with appropriate fields.
-  
-  support_persona: |
-    Create a detailed persona for a support agent at {{company_name}}.
-    
+
+  advisor_persona: |
+    Create a detailed persona for an investment advisor at {{advisor_firm}}.
+
     Include:
     - Experience level (junior, mid-level, senior)
-    - Support level: {{random(support_levels)}}
-    - Specialization areas related to {{random(product_names)}}
-    - Communication style (formal, empathetic, technical, etc.)
-    - Support approach and process
-    - Background knowledge and training
-    
+    - Specialization areas (e.g., growth, dividends, sector-specific)
+    - Communication style (formal, technical, empathetic, etc.)
+    - Certifications (if relevant)
+    - Investment philosophy
+
     Format as a JSON object with appropriate fields.

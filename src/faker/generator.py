@@ -338,7 +338,25 @@ class ChatGenerator:
         
         # Get conversation parameters from config
         conv_config = self.config.get("conversation", {})
-        roles = conv_config.get("roles", ["user", "assistant"])
+        roles_config = conv_config.get("roles", ["user", "assistant"])
+        
+        # Ensure roles are strings to prevent unhashable type errors
+        # Check if we should enforce two-person conversations (new config option)
+        enforce_two_person = conv_config.get("enforce_two_person", True)  # Default to true for backwards compatibility
+        max_roles = 2 if enforce_two_person else len(roles_config)
+        
+        roles = []
+        for role in roles_config[:max_roles]:  # Limit to max_roles (usually 2 for two-person conversations)
+            if isinstance(role, str):
+                roles.append(role)
+            else:
+                # If it's not a string, convert it to a string
+                self.logger.warning(f"Non-string role detected: {role}, converting to string")
+                roles.append(str(role))
+                
+        # Log the roles being used
+        self.logger.info(f"Using roles for conversation: {roles}")
+                
         min_messages = conv_config.get("min_messages", 4)
         max_messages = conv_config.get("max_messages", 12)
         domains = conv_config.get("domains", ["general"])
@@ -346,7 +364,7 @@ class ChatGenerator:
         # Determine if we should use the hybrid approach (default: enabled)
         use_hybrid = conv_config.get("use_hybrid_approach", True)
         
-        # Prepare context for template rendering
+        # Initialize context for template rendering
         context = {
             "domain": random.choice(domains),
             "min_messages": min_messages,
@@ -354,17 +372,305 @@ class ChatGenerator:
             "roles": roles,
             **conv_config.get("variables", {}),
         }
+        
+        # Support dynamic field addition from config
+        dynamic_fields = conv_config.get("dynamic_fields", {})
+        if dynamic_fields:
+            self.logger.info(f"Adding dynamic fields to context: {list(dynamic_fields.keys())}")
+            for field_name, field_values in dynamic_fields.items():
+                if isinstance(field_values, list) and field_values:
+                    # If it's a list, select a random value
+                    context[field_name] = random.choice(field_values)
+                elif isinstance(field_values, dict):
+                    # If it's a dictionary, add it directly
+                    context[field_name] = field_values
+                else:
+                    # Otherwise add the value directly
+                    context[field_name] = field_values
+        
+        # Add speaker information to context BEFORE rendering templates
+        # This ensures name variables are available when templates are rendered
+        predefined_speakers = conv_config.get("speakers", {})
+        
+        # Investment advisor-client conversation
+        if predefined_speakers and "advisors" in predefined_speakers and "clients" in predefined_speakers:
+            # We have predefined speakers - select one advisor and one client
+            advisors = predefined_speakers.get("advisors", [])
+            clients = predefined_speakers.get("clients", [])
+            
+            # Select a random advisor and client
+            selected_advisor = random.choice(advisors) if advisors else None
+            selected_client = random.choice(clients) if clients else None
+            
+            # Use the predefined speakers if available
+            if selected_advisor and "advisor" in roles:
+                advisor_id = selected_advisor.get("id")
+                advisor_name = selected_advisor.get("name")
+                
+                # Add advisor info to context for template rendering
+                context["advisor_id"] = advisor_id
+                context["advisor_name"] = advisor_name
+            
+            if selected_client and "client" in roles:
+                client_id = selected_client.get("id")
+                client_name = selected_client.get("name")
+                
+                # Add client info to context for template rendering
+                context["client_id"] = client_id
+                context["client_name"] = client_name
+        
+        # Customer support conversation
+        elif predefined_speakers and "support_agents" in predefined_speakers and "users" in predefined_speakers:
+            # We have predefined speakers - select one support agent and one user
+            support_agents = predefined_speakers.get("support_agents", [])
+            users = predefined_speakers.get("users", [])
+            
+            # Select a random support agent and user
+            selected_agent = random.choice(support_agents) if support_agents else None
+            selected_user = random.choice(users) if users else None
+            
+            # Use the predefined speakers if available
+            if selected_agent and "support_agent" in roles:
+                agent_id = selected_agent.get("id")
+                agent_name = selected_agent.get("name")
+                
+                # Add agent info to context for template rendering
+                context["agent_id"] = agent_id
+                context["agent_name"] = agent_name
+            
+            if selected_user and "user" in roles:
+                user_id = selected_user.get("id")
+                user_name = selected_user.get("name")
+                
+                # Add user info to context for template rendering
+                context["user_id"] = user_id
+                context["user_name"] = user_name
+        
+        # For any roles that don't have predefined speakers, create them dynamically
+        for role in roles:
+            role_key = f"{role}_name"
+            if role_key not in context:
+                if role == "advisor":
+                    context["advisor_id"] = str(uuid.uuid4())
+                    context["advisor_name"] = "John Advisor"
+                elif role == "client":
+                    context["client_id"] = str(uuid.uuid4())
+                    context["client_name"] = "Jane Client"
+                elif role == "support_agent":
+                    context["agent_id"] = str(uuid.uuid4())
+                    context["agent_name"] = "Support Agent"
+                elif role == "user":
+                    context["user_id"] = str(uuid.uuid4())
+                    context["user_name"] = "User"
+                elif role == "portfolio_manager":
+                    context[f"{role}_id"] = str(uuid.uuid4())
+                    context[f"{role}_name"] = random.choice(["Morgan Stanley", "William Chen", "Jennifer Adams", "Robert Kim"])
+                elif role == "analyst":
+                    context[f"{role}_id"] = str(uuid.uuid4())
+                    context[f"{role}_name"] = random.choice(["Alex Morgan", "Sarah Lee", "James Wilson", "Emma Parker"])
+                elif role == "researcher":
+                    context[f"{role}_id"] = str(uuid.uuid4())
+                    context[f"{role}_name"] = random.choice(["David Kim", "Lisa Zhang", "Mark Johnson", "Rachel Cohen"])
+                elif role == "trader":
+                    context[f"{role}_id"] = str(uuid.uuid4()) 
+                    context[f"{role}_name"] = random.choice(["Michael Chang", "Jessica Wu", "Brian Smith", "Olivia Davis"])
+                else:
+                    context[f"{role}_id"] = str(uuid.uuid4())
+                    context[f"{role}_name"] = role.capitalize()
 
         # Get system prompt if available
         system_prompt = None
         if "system_prompt" in self.templates:
             system_prompt = self.template_engine.render("system_prompt", context)
 
-        # Render the conversation template
+        # First, generate a conversation script/outline if the template exists
+        conversation_script = None
+        
+        # Debug - list all available templates
+        self.logger.info(f"Available templates: {list(self.templates.keys())}")
+        
+        if "conversation_script" in self.templates:
+            self.logger.info("Generating conversation script as a guide...")
+            
+            # Let's fix errors in the template variables before rendering
+            try:
+                # Fix critical template variables that might be causing rendering issues
+                context_copy = context.copy()
+                
+                # Ensure roles array is accessible and properly formatted
+                if "roles" in context_copy:
+                    # Log the roles and context for debugging
+                    self.logger.info(f"Roles in context: {context_copy['roles']}")
+                    self.logger.info(f"Context names: {[k for k in context_copy.keys() if '_name' in k]}")
+                    
+                    # Fix the variable access syntax in the template
+                    context_copy["roles_0"] = context_copy["roles"][0] if len(context_copy["roles"]) > 0 else "analyst"
+                    context_copy["roles_1"] = context_copy["roles"][1] if len(context_copy["roles"]) > 1 else "portfolio_manager"
+                    
+                    # Add explicit speaker names for the template
+                    context_copy["speaker1_name"] = context_copy.get(f"{context_copy['roles_0']}_name", context_copy["roles_0"].capitalize())
+                    context_copy["speaker2_name"] = context_copy.get(f"{context_copy['roles_1']}_name", context_copy["roles_1"].capitalize())
+                    
+                    self.logger.info(f"Prepared script variables: roles_0={context_copy['roles_0']}, roles_1={context_copy['roles_1']}")
+                    self.logger.info(f"Speaker names: speaker1_name={context_copy['speaker1_name']}, speaker2_name={context_copy['speaker2_name']}")
+                
+                # Render the script template with the enhanced context
+                script_template = self.templates.get("conversation_script", "")
+                self.logger.info(f"Conversation script template starts with: {script_template[:100]}...")
+                
+                script_prompt = self.template_engine.render("conversation_script", context_copy)
+                self.logger.info(f"Rendered script prompt successfully, length: {len(script_prompt)}")
+            except Exception as e:
+                self.logger.warning(f"Error preparing conversation script template: {e}")
+                # Create a simpler script template directly
+                # Get speaker names for the roles
+                speaker1_name = context.get(f"{roles[0]}_name", roles[0].capitalize())
+                speaker2_name = context.get(f"{roles[1]}_name", roles[1].capitalize())
+                
+                script_prompt = f"""Create a conversation script/outline between {roles[0]} ('{speaker1_name}') and {roles[1]} ('{speaker2_name}').
+                
+                IMPORTANT: ONLY use these two exact roles:
+                - {roles[0]}
+                - {roles[1]}
+                Do NOT introduce any other roles like "trader" or "researcher" that aren't specified above.
+                
+                The outline should determine the flow of who speaks when, including when the same person might speak twice in a row.
+                
+                Domain: {context.get('domain', 'general')}
+                Meeting Type: {context.get('meeting_type', 'discussion')}
+                
+                The conversation should have between {context.get('min_messages', 4)} and {context.get('max_messages', 12)} message turns.
+                
+                Output the script as a JSON array where each object has:
+                - "speaker": MUST be EXACTLY "{roles[0]}" or "{roles[1]}" (no variations)
+                - "speaker_name": "{speaker1_name}" or "{speaker2_name}" depending on speaker
+                - "subject": brief description of what they'll talk about
+                - "consecutive": boolean, true if this is a follow-up message from the same speaker
+                
+                Example of a valid script turn:
+                {{"speaker": "{roles[0]}", "speaker_name": "{speaker1_name}", "subject": "Asks about recent market performance", "consecutive": false}}
+                """
+                self.logger.info("Using fallback script prompt due to template error")
+            
+            # Add formatting instructions specific to the script
+            script_prompt += "\n\nYour response MUST be a valid JSON array. No explanations or additional text."
+            
+            # Generate the conversation script using the LLM
+            script_result, _ = self.llm.generate(
+                script_prompt,
+                system_prompt=system_prompt,
+                temperature=0.7,  # Use consistent temperature for script generation
+                max_tokens=512,  # Script needs fewer tokens
+            )
+            
+            try:
+                # Show the raw script result for debugging
+                self.logger.info(f"Raw script result (first 200 chars): {script_result[:200]}...")
+                
+                # Try to parse the script as a JSON array
+                from src.faker.response_parser import parse_llm_response
+                conversation_script = parse_llm_response(script_result)
+                
+                # Log details about the parsed result
+                if isinstance(conversation_script, list):
+                    self.logger.info(f"Successfully parsed conversation script as list of {len(conversation_script)} elements")
+                    if len(conversation_script) > 0:
+                        self.logger.info(f"First script turn: {conversation_script[0]}")
+                elif isinstance(conversation_script, dict):
+                    self.logger.warning(f"Script parsed as dictionary instead of list: {conversation_script.keys()}")
+                else:
+                    self.logger.warning(f"Script parsed as unexpected type: {type(conversation_script)}")
+                
+                if isinstance(conversation_script, list) and len(conversation_script) > 0:
+                    self.logger.info(f"Generated conversation script with {len(conversation_script)} turns")
+                    
+                    # Validate the script turns have the required fields
+                    valid_turns = []
+                    for i, turn in enumerate(conversation_script):
+                        if not isinstance(turn, dict):
+                            self.logger.warning(f"Script turn {i} is not a dictionary: {turn}")
+                            continue
+                            
+                        speaker = turn.get("speaker")
+                        if not speaker or speaker not in roles:
+                            self.logger.warning(f"Script turn {i} has invalid speaker: {speaker}")
+                            # Try to assign a valid role
+                            turn["speaker"] = roles[i % len(roles)]
+                            
+                        if "subject" not in turn:
+                            turn["subject"] = f"Turn {i+1} in conversation"
+                            
+                        if "consecutive" not in turn:
+                            # Set consecutive to true if same speaker as previous turn
+                            if i > 0 and turn.get("speaker") == valid_turns[-1].get("speaker"):
+                                turn["consecutive"] = True
+                            else:
+                                turn["consecutive"] = False
+                                
+                        valid_turns.append(turn)
+                    
+                    # Replace with validated turns
+                    conversation_script = valid_turns
+                    
+                    # Add the script to the context for use in the full conversation template
+                    context["conversation_script"] = conversation_script
+                    
+                    # Create a plain text version to include in the prompt
+                    script_text = "\n\nFollow this conversation flow (including when the same person speaks consecutively):\n"
+                    for i, turn in enumerate(conversation_script):
+                        speaker = turn.get("speaker", "unknown")
+                        speaker_name = turn.get("speaker_name", context.get(f"{speaker}_name", speaker))
+                        subject = turn.get("subject", "")
+                        consecutive = turn.get("consecutive", False)
+                        consecutive_marker = " (consecutive)" if consecutive else ""
+                        
+                        script_text += f"{i+1}. {speaker_name} ({speaker}){consecutive_marker}: {subject}\n"
+                    
+                    # This will be appended to the main prompt
+                    context["script_guidance"] = script_text
+                    self.logger.info("Added script guidance to conversation prompt")
+                    
+                else:
+                    self.logger.warning("Generated script was not a valid list, proceeding without script guidance")
+            except Exception as e:
+                import traceback
+                self.logger.warning(f"Failed to parse conversation script: {e}")
+                self.logger.warning(f"Traceback: {traceback.format_exc()}")
+                self.logger.warning("Proceeding without script guidance")
+        
+        # Now render the main conversation template
         prompt = self.template_engine.render("conversation", context)
         
-        # Add JSON formatting instructions
-        formatted_prompt = self.template_engine.add_formatting_instructions(prompt)
+        # Add the script guidance if available
+        if "script_guidance" in context:
+            prompt += context["script_guidance"]
+        
+        # Log the rendered prompt to see if variables were replaced correctly
+        self.logger.debug(f"Generated prompt with context: {context}")
+        
+        # Check if any template variables weren't replaced
+        import re
+        template_vars = re.findall(r'{{(.+?)}}', prompt)
+        
+        # Filter out variables from examples like {{name}} which are intentionally there
+        if template_vars:
+            # Remove single occurrences of 'name' as they're likely from examples
+            filtered_vars = [var.strip() for var in template_vars if var.strip() != 'name']
+            
+            # Also filter out variables in examples section which are part of instructions
+            filtered_vars = [var for var in filtered_vars if 
+                             not (var == 'advisor_name' and 'EXAMPLES OF CORRECT NAME USAGE' in prompt) and
+                             not (var == 'client_name' and 'EXAMPLES OF CORRECT NAME USAGE' in prompt) and
+                             not (var == 'agent_name' and 'EXAMPLES OF CORRECT NAME USAGE' in prompt) and
+                             not (var == 'user_name' and 'EXAMPLES OF CORRECT NAME USAGE' in prompt) and
+                             not (var == 'company_name' and 'EXAMPLES OF CORRECT NAME USAGE' in prompt) and
+                             not (var == 'advisor_firm' and 'EXAMPLES OF CORRECT NAME USAGE' in prompt)]
+            
+            if filtered_vars:
+                self.logger.warning(f"Template variables not replaced in prompt: {filtered_vars}")
+            
+        # Add JSON formatting instructions with the context for few-shot examples
+        formatted_prompt = self.template_engine.add_formatting_instructions(prompt, context=context)
 
         # Generate the conversation using the LLM
         start_time = time.time()
@@ -386,9 +692,25 @@ class ChatGenerator:
             # Process based on the structure
             if isinstance(parsed_data, list):
                 # Direct list of messages - validate and clean
-                valid_messages, is_valid = validate_conversation_messages(
-                    parsed_data, required_roles=roles
-                )
+                try:
+                    # Add debug logging to inspect the message structure
+                    self.logger.debug(f"Message structure before validation: {json.dumps(parsed_data[:2], default=str)}")
+                    self.logger.debug(f"Roles before validation: {roles}")
+                    
+                    valid_messages, is_valid = validate_conversation_messages(
+                        parsed_data, required_roles=roles, context_vars=context
+                    )
+                except TypeError as e:
+                    # Handle unhashable type error if it occurs
+                    self.logger.warning(f"Validation error: {e}, attempting with string roles")
+                    # Add detailed logging
+                    import traceback
+                    self.logger.warning(f"Traceback: {traceback.format_exc()}")
+                    
+                    string_roles = [str(r) for r in roles]
+                    valid_messages, is_valid = validate_conversation_messages(
+                        parsed_data, required_roles=string_roles, context_vars=context
+                    )
                 
                 if not valid_messages:
                     raise ValueError("No valid messages found after parsing")
@@ -399,9 +721,17 @@ class ChatGenerator:
             
             elif isinstance(parsed_data, dict) and "messages" in parsed_data:
                 # Messages wrapped in object - validate and clean
-                valid_messages, is_valid = validate_conversation_messages(
-                    parsed_data["messages"], required_roles=roles
-                )
+                try:
+                    valid_messages, is_valid = validate_conversation_messages(
+                        parsed_data["messages"], required_roles=roles, context_vars=context
+                    )
+                except TypeError as e:
+                    # Handle unhashable type error if it occurs
+                    self.logger.warning(f"Validation error: {e}, attempting with string roles")
+                    string_roles = [str(r) for r in roles]
+                    valid_messages, is_valid = validate_conversation_messages(
+                        parsed_data["messages"], required_roles=string_roles, context_vars=context
+                    )
                 
                 if not valid_messages:
                     raise ValueError("No valid messages found after parsing")
@@ -415,6 +745,19 @@ class ChatGenerator:
                 self.logger.warning(f"Unexpected result format: {result[:100]}...")
                 valid_messages = extract_conversation_from_text(result, roles, max_messages)
                 
+                # Apply post-processing to fix any template placeholders
+                try:
+                    valid_messages, _ = validate_conversation_messages(
+                        valid_messages, required_roles=roles, context_vars=context
+                    )
+                except TypeError as e:
+                    # Handle unhashable type error if it occurs
+                    self.logger.warning(f"Validation error: {e}, attempting with string roles")
+                    string_roles = [str(r) for r in roles]
+                    valid_messages, _ = validate_conversation_messages(
+                        valid_messages, required_roles=string_roles, context_vars=context
+                    )
+                
                 if use_hybrid:
                     # Enhance these basic messages with metadata
                     valid_messages = self._enhance_messages_with_metadata(valid_messages)
@@ -424,162 +767,350 @@ class ChatGenerator:
             self.logger.warning(f"Failed to parse result as structured data: {e}")
             valid_messages = extract_conversation_from_text(result, roles, max_messages)
             
+            # Apply post-processing to fix any template placeholders
+            try:
+                valid_messages, _ = validate_conversation_messages(
+                    valid_messages, required_roles=roles, context_vars=context
+                )
+            except TypeError as e:
+                # Handle unhashable type error if it occurs
+                self.logger.warning(f"Validation error: {e}, attempting with string roles")
+                string_roles = [str(r) for r in roles]
+                valid_messages, _ = validate_conversation_messages(
+                    valid_messages, required_roles=string_roles, context_vars=context
+                )
+            
             if use_hybrid:
                 # Enhance these messages with metadata
                 valid_messages = self._enhance_messages_with_metadata(valid_messages)
         
-        # Check if we have predefined speakers in the config
-        predefined_speakers = conv_config.get("speakers", {})
+        # Create speaker objects from the names we've already added to context
         speakers = {}
         role_to_speaker = {}
+        predefined_speakers = conv_config.get("speakers", {})
         
         # Investment advisor-client conversation
-        if predefined_speakers and "advisors" in predefined_speakers and "clients" in predefined_speakers:
-            # We have predefined speakers - select one advisor and one client
-            advisors = predefined_speakers.get("advisors", [])
-            clients = predefined_speakers.get("clients", [])
+        if "advisor_name" in context and "client_name" in context:
+            # Get IDs (either existing or new)
+            advisor_id = context.get("advisor_id", str(uuid.uuid4()))
+            client_id = context.get("client_id", str(uuid.uuid4()))
             
-            # Select a random advisor and client
-            selected_advisor = random.choice(advisors) if advisors else None
-            selected_client = random.choice(clients) if clients else None
+            # Get metadata if available
+            advisor_metadata = {}
+            client_metadata = {}
             
-            # Use the predefined speakers if available
-            if selected_advisor and "advisor" in roles:
-                advisor_id = selected_advisor.get("id")
-                advisor_name = selected_advisor.get("name")
-                advisor_metadata = selected_advisor.get("metadata", {})
-                
-                # Add to speaker dictionary
-                speakers[advisor_id] = Speaker(
-                    id=advisor_id,
-                    name=advisor_name,
-                    role="advisor",
-                    metadata=advisor_metadata
-                )
-                
-                # Map role to speaker ID
-                role_to_speaker["advisor"] = advisor_id
-                
-                # Add advisor info to context for template rendering
-                context["advisor_id"] = advisor_id
-                context["advisor_name"] = advisor_name
+            # Try to get metadata from predefined speakers
+            if predefined_speakers and "advisors" in predefined_speakers:
+                for advisor in predefined_speakers.get("advisors", []):
+                    if advisor.get("name") == context["advisor_name"]:
+                        advisor_metadata = advisor.get("metadata", {})
+                        break
+                        
+            if predefined_speakers and "clients" in predefined_speakers:
+                for client in predefined_speakers.get("clients", []):
+                    if client.get("name") == context["client_name"]:
+                        client_metadata = client.get("metadata", {})
+                        break
             
-            if selected_client and "client" in roles:
-                client_id = selected_client.get("id")
-                client_name = selected_client.get("name")
-                client_metadata = selected_client.get("metadata", {})
-                
-                # Add to speaker dictionary
-                speakers[client_id] = Speaker(
-                    id=client_id,
-                    name=client_name,
-                    role="client",
-                    metadata=client_metadata
-                )
-                
-                # Map role to speaker ID
-                role_to_speaker["client"] = client_id
-                
-                # Add client info to context for template rendering
-                context["client_id"] = client_id
-                context["client_name"] = client_name
+            # Create speaker objects
+            speakers[advisor_id] = Speaker(
+                id=advisor_id,
+                name=context["advisor_name"],
+                role="advisor",
+                metadata=advisor_metadata
+            )
+            
+            speakers[client_id] = Speaker(
+                id=client_id,
+                name=context["client_name"],
+                role="client",
+                metadata=client_metadata
+            )
+            
+            # Map roles to speaker IDs
+            role_to_speaker["advisor"] = advisor_id
+            role_to_speaker["client"] = client_id
         
         # Customer support conversation
-        elif predefined_speakers and "support_agents" in predefined_speakers and "users" in predefined_speakers:
-            # We have predefined speakers - select one support agent and one user
-            support_agents = predefined_speakers.get("support_agents", [])
-            users = predefined_speakers.get("users", [])
+        elif "agent_name" in context and "user_name" in context:
+            # Get IDs (either existing or new)
+            agent_id = context.get("agent_id", str(uuid.uuid4()))
+            user_id = context.get("user_id", str(uuid.uuid4()))
             
-            # Select a random support agent and user
-            selected_agent = random.choice(support_agents) if support_agents else None
-            selected_user = random.choice(users) if users else None
+            # Get metadata if available
+            agent_metadata = {}
+            user_metadata = {}
             
-            # Use the predefined speakers if available
-            if selected_agent and "support_agent" in roles:
-                agent_id = selected_agent.get("id")
-                agent_name = selected_agent.get("name")
-                agent_metadata = selected_agent.get("metadata", {})
-                
-                # Add to speaker dictionary
-                speakers[agent_id] = Speaker(
-                    id=agent_id,
-                    name=agent_name,
-                    role="support_agent",
-                    metadata=agent_metadata
-                )
-                
-                # Map role to speaker ID
-                role_to_speaker["support_agent"] = agent_id
-                
-                # Add agent info to context for template rendering
-                context["agent_id"] = agent_id
-                context["agent_name"] = agent_name
+            # Try to get metadata from predefined speakers
+            if predefined_speakers and "support_agents" in predefined_speakers:
+                for agent in predefined_speakers.get("support_agents", []):
+                    if agent.get("name") == context["agent_name"]:
+                        agent_metadata = agent.get("metadata", {})
+                        break
+                        
+            if predefined_speakers and "users" in predefined_speakers:
+                for user in predefined_speakers.get("users", []):
+                    if user.get("name") == context["user_name"]:
+                        user_metadata = user.get("metadata", {})
+                        break
             
-            if selected_user and "user" in roles:
-                user_id = selected_user.get("id")
-                user_name = selected_user.get("name")
-                user_metadata = selected_user.get("metadata", {})
-                
-                # Add to speaker dictionary
-                speakers[user_id] = Speaker(
-                    id=user_id,
-                    name=user_name,
-                    role="user",
-                    metadata=user_metadata
-                )
-                
-                # Map role to speaker ID
-                role_to_speaker["user"] = user_id
-                
-                # Add user info to context for template rendering
-                context["user_id"] = user_id
-                context["user_name"] = user_name
+            # Create speaker objects
+            speakers[agent_id] = Speaker(
+                id=agent_id,
+                name=context["agent_name"],
+                role="support_agent",
+                metadata=agent_metadata
+            )
+            
+            speakers[user_id] = Speaker(
+                id=user_id,
+                name=context["user_name"],
+                role="user",
+                metadata=user_metadata
+            )
+            
+            # Map roles to speaker IDs
+            role_to_speaker["support_agent"] = agent_id
+            role_to_speaker["user"] = user_id
         
-        # For any roles that don't have predefined speakers, create them dynamically
+        # For any other roles, create speakers for them
         for role in roles:
             if role not in role_to_speaker:
-                speaker_id = str(uuid.uuid4())
+                speaker_id = context.get(f"{role}_id", str(uuid.uuid4()))
+                speaker_name = context.get(f"{role}_name", role.capitalize())
+                
                 speakers[speaker_id] = Speaker(
-                    id=speaker_id, name=role.capitalize(), role=role
+                    id=speaker_id, 
+                    name=speaker_name, 
+                    role=role
                 )
                 role_to_speaker[role] = speaker_id
-                
-                # Add dynamic speaker info to context
-                if role == "advisor":
-                    context["advisor_id"] = speaker_id
-                    context["advisor_name"] = "Advisor"
-                elif role == "client":
-                    context["client_id"] = speaker_id
-                    context["client_name"] = "Client"
         
         # Create Message objects
         messages = []
-        for msg_data in valid_messages:
-            role = msg_data.get("role")
-            content = msg_data.get("content")
-            
-            # Default to first role if role is invalid
-            if role not in role_to_speaker:
-                role = roles[0]
-                
-            message = Message(
-                content=content,
-                speaker_id=role_to_speaker[role],
-                # Add additional metadata if available
-                sentiment=msg_data.get("sentiment"),
-                intent=msg_data.get("intent"),
-                entities=msg_data.get("entities", []),
-                topics=msg_data.get("topics", []),
-                language=msg_data.get("language"),
-                formality=msg_data.get("formality"),
-                metadata=msg_data.get("metadata", {}),
-            )
-            messages.append(message)
         
-        # Create the conversation object
+        # If we have a conversation script, use it to ensure role consistency
+        # This helps with cases where the same person might speak twice in a row
+        conversation_script = context.get("conversation_script")
+        
+        # Add an extra verification step to ensure script exists and has proper structure
+        if conversation_script:
+            if not isinstance(conversation_script, list):
+                self.logger.warning(f"Script is not a list, type: {type(conversation_script)}")
+                conversation_script = None
+            elif len(conversation_script) == 0:
+                self.logger.warning("Script is an empty list")
+                conversation_script = None
+            else:
+                # Check first element to ensure it has expected structure
+                first_turn = conversation_script[0]
+                if not isinstance(first_turn, dict) or "speaker" not in first_turn:
+                    self.logger.warning(f"First script turn has invalid structure: {first_turn}")
+                    conversation_script = None
+                else:
+                    self.logger.info(f"Script validation passed, {len(conversation_script)} turns")
+        
+        if conversation_script and isinstance(conversation_script, list) and len(conversation_script) > 0:
+            self.logger.info("Using conversation script to guide message creation")
+            
+            # Map each message to a script turn based on its position
+            # Allowing for some flexibility if the counts don't exactly match
+            script_length = len(conversation_script)
+            message_length = len(valid_messages)
+            
+            # Prepare a mapping of message index to script turn
+            script_mapping = []
+            current_script_idx = 0
+            
+            # Build mapping to account for consecutive messages
+            while len(script_mapping) < message_length and current_script_idx < script_length:
+                script_turn = conversation_script[current_script_idx]
+                script_mapping.append(current_script_idx)
+                
+                # If this turn allows consecutive messages and we haven't mapped all messages yet
+                if script_turn.get("consecutive", False) and len(script_mapping) < message_length:
+                    # Allow for an extra message with the same speaker
+                    script_mapping.append(current_script_idx)
+                
+                current_script_idx += 1
+            
+            # Fill any remaining messages by cycling through script turns
+            while len(script_mapping) < message_length:
+                script_mapping.append((len(script_mapping) % script_length))
+            
+            # Now create messages using the script mapping
+            for i, msg_data in enumerate(valid_messages):
+                content = msg_data.get("content", "")
+                
+                # Get the script turn for this message position
+                script_turn_idx = script_mapping[i] if i < len(script_mapping) else i % script_length
+                script_turn = conversation_script[script_turn_idx]
+                
+                # Use the role from the script
+                role = script_turn.get("speaker")
+                if role not in role_to_speaker:
+                    self.logger.warning(f"Script specified unknown role: {role}, defaulting to allowed roles")
+                    # Check if the role in the message data matches our allowed roles
+                    msg_role = msg_data.get("role")
+                    if msg_role in role_to_speaker:
+                        role = msg_role
+                    else:
+                        role = roles[i % len(roles)]  # Fallback to alternating roles
+                
+                # Log when script is being enforced to override the message role
+                orig_role = msg_data.get("role")
+                if orig_role != role and orig_role not in role_to_speaker:
+                    self.logger.info(f"Script enforcing role {role} instead of invalid {orig_role} at position {i}")
+                
+                # Get speaker name from the script or context
+                speaker_name = script_turn.get("speaker_name") or context.get(f"{role}_name", role.capitalize())
+                
+                # Process content to replace any template placeholders
+                if "{{" in content or "}}" in content:
+                    content = content.replace("{{advisor_name}}", context.get("advisor_name", ""))
+                    content = content.replace("{{client_name}}", context.get("client_name", ""))
+                    content = content.replace("{{agent_name}}", context.get("agent_name", ""))
+                    content = content.replace("{{user_name}}", context.get("user_name", ""))
+                    
+                    # Handle roles specifically to ensure correct names are used
+                    for r in roles:
+                        if f"{{{{{r}_name}}}}" in content:
+                            content = content.replace(f"{{{{{r}_name}}}}", context.get(f"{r}_name", r.capitalize()))
+                
+                # Check for generic role names that should be replaced with specific names
+                if role == "portfolio_manager" and "Portfolio Manager" in content:
+                    content = content.replace("Portfolio Manager", speaker_name)
+                
+                # Process entities for this message
+                entities = msg_data.get("entities", [])
+                if not isinstance(entities, list):
+                    self.logger.warning(f"Entities is not a list, converting: {entities}")
+                    try:
+                        entities = list(entities) if hasattr(entities, '__iter__') else []
+                    except (TypeError, ValueError):
+                        entities = []
+                
+                # Process each entity to ensure it's a simple dict with string keys
+                processed_entities = []
+                for entity in entities:
+                    if isinstance(entity, dict):
+                        # Clean the dict to ensure all keys and values are strings or simple types
+                        clean_entity = {}
+                        for k, v in entity.items():
+                            # Convert any complex keys/values to strings
+                            try:
+                                clean_key = str(k)
+                                clean_value = v
+                                if isinstance(v, dict):
+                                    clean_value = str(v)  # Convert nested dicts to string
+                                clean_entity[clean_key] = clean_value
+                            except Exception as e:
+                                self.logger.warning(f"Error cleaning entity: {e}")
+                        processed_entities.append(clean_entity)
+                    elif entity is not None:
+                        # If it's not a dict but not None, convert to string
+                        processed_entities.append({"entity": str(entity), "entity_type": "unknown"})
+                
+                # Create and add the message
+                message = Message(
+                    content=content,
+                    speaker_id=role_to_speaker[role],
+                    # Add additional metadata if available
+                    sentiment=msg_data.get("sentiment"),
+                    intent=msg_data.get("intent"),
+                    entities=processed_entities,
+                    topics=msg_data.get("topics", []),
+                    language=msg_data.get("language"),
+                    formality=msg_data.get("formality"),
+                    metadata=msg_data.get("metadata", {}),
+                )
+                messages.append(message)
+        
+        # If no conversation script or script application failed, use the original method
+        else:
+            self.logger.info("No conversation script available, using standard role assignment")
+            
+            for msg_data in valid_messages:
+                role = msg_data.get("role")
+                content = msg_data.get("content", "")
+                
+                # Default to first role if role is invalid
+                if role not in role_to_speaker:
+                    role = roles[0]
+                
+                # Get speaker name for this role from context
+                speaker_name = context.get(f"{role}_name", role.capitalize())
+                
+                # Ensure content uses the correct name by replacing template-like patterns
+                # This ensures names in message content match the speaker definitions
+                if "{{" in content or "}}" in content:
+                    content = content.replace("{{advisor_name}}", context.get("advisor_name", ""))
+                    content = content.replace("{{client_name}}", context.get("client_name", ""))
+                    content = content.replace("{{agent_name}}", context.get("agent_name", ""))
+                    content = content.replace("{{user_name}}", context.get("user_name", ""))
+                    
+                    # Handle roles specifically to ensure correct names are used
+                    for r in roles:
+                        if f"{{{{{r}_name}}}}" in content:
+                            content = content.replace(f"{{{{{r}_name}}}}", context.get(f"{r}_name", r.capitalize()))
+                
+                # Check for generic role names that should be replaced with specific names
+                if role == "portfolio_manager" and "Portfolio Manager" in content:
+                    content = content.replace("Portfolio Manager", speaker_name)
+                
+                # Process entities to ensure they're serializable
+                entities = msg_data.get("entities", [])
+                if not isinstance(entities, list):
+                    self.logger.warning(f"Entities is not a list, converting: {entities}")
+                    try:
+                        entities = list(entities) if hasattr(entities, '__iter__') else []
+                    except (TypeError, ValueError):
+                        entities = []
+                
+                # Process each entity to ensure it's a simple dict with string keys
+                processed_entities = []
+                for entity in entities:
+                    if isinstance(entity, dict):
+                        # Clean the dict to ensure all keys and values are strings or simple types
+                        clean_entity = {}
+                        for k, v in entity.items():
+                            # Convert any complex keys/values to strings
+                            try:
+                                clean_key = str(k)
+                                clean_value = v
+                                if isinstance(v, dict):
+                                    clean_value = str(v)  # Convert nested dicts to string
+                                clean_entity[clean_key] = clean_value
+                            except Exception as e:
+                                self.logger.warning(f"Error cleaning entity: {e}")
+                        processed_entities.append(clean_entity)
+                    elif entity is not None:
+                        # If it's not a dict but not None, convert to string
+                        processed_entities.append({"entity": str(entity), "entity_type": "unknown"})
+                
+                # Create and add the message
+                message = Message(
+                    content=content,
+                    speaker_id=role_to_speaker[role],
+                    # Add additional metadata if available
+                    sentiment=msg_data.get("sentiment"),
+                    intent=msg_data.get("intent"),
+                    entities=processed_entities,
+                    topics=msg_data.get("topics", []),
+                    language=msg_data.get("language"),
+                    formality=msg_data.get("formality"),
+                    metadata=msg_data.get("metadata", {}),
+                )
+                messages.append(message)
+        
+        # Create filtered speakers dictionary with only active speakers
+        active_speaker_ids = set(msg.speaker_id for msg in messages)
+        active_speakers = {id: speaker for id, speaker in speakers.items() if id in active_speaker_ids}
+        
+        # Create the conversation object with only the active speakers
         conversation = Conversation(
             messages=messages,
-            speakers=speakers,
+            speakers=active_speakers,
             domain=context.get("domain"),
             generation_config=metadata.get("generation_config", {}),
             prompt_template=formatted_prompt,

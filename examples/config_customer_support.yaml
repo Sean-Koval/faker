@@ -77,6 +77,24 @@ conversation:
   use_batch_requests: true        # Use batch requests for message enhancement
   batch_chunk_size: 10            # Number of messages to process in one batch
   
+  # Dynamic fields example - these can be referenced in templates with {{field_name}}
+  dynamic_fields:
+    agent_department:
+      - "Technical Support"
+      - "Billing Department"
+      - "Account Management"
+      - "Product Support"
+    issue_priority:
+      - "High"
+      - "Medium"
+      - "Low"
+    user_location:
+      - "New York"
+      - "San Francisco"
+      - "Chicago"
+      - "Seattle"
+      - "Austin"
+  
   # Rate limiting and performance parameters
   calls_per_minute: 60            # Maximum API calls per minute (rate limit)
   max_parallel_calls: 10          # Maximum parallel API calls allowed
@@ -112,13 +130,33 @@ templates:
     You are an expert in generating realistic conversational data for training AI systems.
     Your task is to create authentic-sounding conversations that include all the requested metadata.
     The content should be diverse but always professional and inoffensive.
+    
+    CRITICAL INSTRUCTION: You MUST use the actual names provided in your output conversation.
+    - For support agent, use ONLY the specific name provided (e.g., "David Lee", "Rachel Green")
+    - For user/customer, use ONLY the specific name provided (e.g., "Alex Thompson", "Jordan Smith")
+    - You MUST directly reference these names in the conversation content
+    - Personalize the conversation by having the agent address the user by their name
+    - Personalize user messages to occasionally mention the agent by name
+    - Your generated messages MUST include several instances of these real names
+    - NEVER output template syntax like {{agent_name}} or {{user_name}} - use the actual name values instead
+    
+    EXAMPLES:
+    
+    ✅ CORRECT: "Hello Alex Thompson, my name is David Lee. I understand you're having an issue with your account."
+    ❌ INCORRECT: "Hello {{user_name}}, my name is {{agent_name}}. I understand you're having an issue with your account."
+    
+    ✅ CORRECT: "David Lee from customer support helped me last time, but the issue has returned."
+    ❌ INCORRECT: "{{agent_name}} from customer support helped me last time, but the issue has returned."
 
   # Main conversation generation template
   conversation: |
     Generate a realistic customer support conversation between a customer and a support agent for {{company_name}}.
     
     Agent: {{agent_name}} ({{agent_id}})
+    Agent Department: {{agent_department}}
     User: {{user_name}} ({{user_id}})
+    User Location: {{user_location}}
+    Issue Priority: {{issue_priority}}
     Domain: {{domain}}
     Product: {{random(product_names)}}
     Customer Type: {{random(customer_types)}}
@@ -157,8 +195,24 @@ templates:
       ...
     ]
     
-    IMPORTANT: Use the agent and user names in the conversation. Make the conversation personalized
-    for these specific individuals and refer to them by name occasionally in the messages.
+    NAME USAGE REQUIREMENTS:
+    1. You MUST use the actual agent name "{{agent_name}}" multiple times in the agent's messages
+    2. You MUST use the actual user name "{{user_name}}" multiple times in the conversation
+    3. The agent MUST address the user by name at least twice
+    4. The user should occasionally mention the agent by name
+    5. NEVER use template syntax ({{name}}) in the output content - use the actual name values
+
+    EXAMPLES OF CORRECT NAME USAGE (assuming agent_name is "David Lee" and user_name is "Alex Thompson"):
+    ✅ "Hello Alex Thompson, this is David Lee from {{company_name}} support. How can I help you today?"
+    ✅ "David Lee helped me with a similar issue last month, but it's happening again."
+    ✅ "I understand your frustration, Alex Thompson. Let me check your account details."
+    ✅ "Thank you for your assistance, David Lee. The solution you provided worked perfectly."
+
+    Remember: In your output, replace any {{name}} placeholders with the actual names provided:
+    - Agent: "{{agent_name}}"
+    - User: "{{user_name}}"
+    
+    CHECK your final output carefully to ensure all placeholders are replaced with real names!
   
   # Additional templates for generating personas
   user_persona: |

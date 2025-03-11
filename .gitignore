@@ -37,10 +37,12 @@ coverage.xml
 *.cover
 .hypothesis/
 .pytest_cache/
+logs/
 
 # Project specific
 output/
 credentials.json
+examples/financial_example.txt
 
 # IDE
 .vscode/

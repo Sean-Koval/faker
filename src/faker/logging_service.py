@@ -4,6 +4,8 @@ This module provides a centralized logging service for tracking generation runs,
 storing run metadata, and computing metrics.
 """
 
+import asyncio
+import functools
 import json
 import logging
 import os
@@ -11,10 +13,175 @@ import sqlite3
 import time
 import uuid
 from datetime import datetime
+from functools import wraps
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Union
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union
 
 from src.faker.models import Conversation, Dataset, RunInfo
+
+
+class PerformanceTimer:
+    """Utility for timing code execution and collecting performance metrics."""
+    
+    _timers: Dict[str, Dict[str, Any]] = {}
+    _counts: Dict[str, int] = {}
+    _token_counts: Dict[str, Dict[str, int]] = {}
+    
+    @classmethod
+    def reset(cls):
+        """Reset all timers and counters."""
+        cls._timers = {}
+        cls._counts = {}
+        cls._token_counts = {}
+    
+    @classmethod
+    def start_timer(cls, name: str) -> float:
+        """Start a timer with the given name.
+        
+        Args:
+            name: Name of the timer
+            
+        Returns:
+            Current time in seconds
+        """
+        start_time = time.time()
+        if name not in cls._timers:
+            cls._timers[name] = {
+                'starts': [],
+                'ends': [],
+                'durations': []
+            }
+        cls._timers[name]['starts'].append(start_time)
+        cls._counts[name] = cls._counts.get(name, 0) + 1
+        return start_time
+    
+    @classmethod
+    def end_timer(cls, name: str) -> float:
+        """End a timer with the given name.
+        
+        Args:
+            name: Name of the timer
+            
+        Returns:
+            Duration in seconds
+        """
+        end_time = time.time()
+        
+        if name not in cls._timers or not cls._timers[name]['starts']:
+            logging.warning(f"Timer {name} was never started")
+            return 0.0
+        
+        start_time = cls._timers[name]['starts'].pop()
+        cls._timers[name]['ends'].append(end_time)
+        duration = end_time - start_time
+        cls._timers[name]['durations'].append(duration)
+        return duration
+    
+    @classmethod
+    def record_tokens(cls, name: str, input_tokens: int, output_tokens: int):
+        """Record token counts for an operation.
+        
+        Args:
+            name: Name of the operation
+            input_tokens: Number of input tokens
+            output_tokens: Number of output tokens
+        """
+        if name not in cls._token_counts:
+            cls._token_counts[name] = {
+                'input': 0,
+                'output': 0,
+                'total': 0,
+                'calls': 0
+            }
+        
+        cls._token_counts[name]['input'] += input_tokens
+        cls._token_counts[name]['output'] += output_tokens
+        cls._token_counts[name]['total'] += (input_tokens + output_tokens)
+        cls._token_counts[name]['calls'] += 1
+    
+    @classmethod
+    def get_stats(cls) -> Dict[str, Any]:
+        """Get statistics for all timers.
+        
+        Returns:
+            Dictionary containing timing statistics
+        """
+        stats = {}
+        
+        # Process timing data
+        for name, timer in cls._timers.items():
+            durations = timer['durations']
+            if not durations:
+                continue
+                
+            stats[name] = {
+                'count': cls._counts.get(name, 0),
+                'total_time': sum(durations),
+                'avg_time': sum(durations) / len(durations),
+                'min_time': min(durations) if durations else 0,
+                'max_time': max(durations) if durations else 0
+            }
+        
+        # Add token statistics
+        stats['tokens'] = cls._token_counts.copy()
+        
+        # Add total token counts across all operations
+        total_input = sum(tc['input'] for tc in cls._token_counts.values())
+        total_output = sum(tc['output'] for tc in cls._token_counts.values())
+        total_calls = sum(tc['calls'] for tc in cls._token_counts.values())
+        
+        stats['tokens']['all'] = {
+            'input': total_input,
+            'output': total_output,
+            'total': total_input + total_output,
+            'calls': total_calls
+        }
+        
+        return stats
+
+
+def timer(name: str):
+    """Decorator to time function execution.
+    
+    Args:
+        name: Name for the timer
+        
+    Returns:
+        Decorated function
+    """
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            PerformanceTimer.start_timer(name)
+            try:
+                result = func(*args, **kwargs)
+                return result
+            finally:
+                PerformanceTimer.end_timer(name)
+        return wrapper
+    return decorator
+
+
+def async_timer(name: str):
+    """Decorator to time async function execution.
+    
+    Args:
+        name: Name for the timer
+        
+    Returns:
+        Decorated async function
+    """
+    def decorator(func):
+        @wraps(func)
+        async def wrapper(*args, **kwargs):
+            PerformanceTimer.start_timer(name)
+            try:
+                result = await func(*args, **kwargs)
+                return result
+            finally:
+                PerformanceTimer.end_timer(name)
+        return wrapper
+    return decorator
 
 
 class LogStore:
@@ -617,7 +784,29 @@ class MetricsService:
                 if msg.topics:
                     all_topics.update(msg.topics)
                 if msg.entities:
-                    all_entities.update(msg.entities)
+                    # Process entities to handle dictionaries
+                    for entity in msg.entities:
+                        if isinstance(entity, dict):
+                            # For dictionaries, extract a string representation
+                            if 'entity' in entity and isinstance(entity['entity'], str):
+                                all_entities.add(entity['entity'])
+                            elif 'standard_form' in entity and isinstance(entity['standard_form'], str):
+                                all_entities.add(entity['standard_form'])
+                            else:
+                                # Use a frozen representation to make it hashable
+                                try:
+                                    all_entities.add(str(entity))
+                                except (TypeError, ValueError):
+                                    logger.warning(f"Could not add entity to set: {entity}")
+                        elif isinstance(entity, str):
+                            # Strings are already hashable
+                            all_entities.add(entity)
+                        elif entity is not None:
+                            # Convert other types to string
+                            try:
+                                all_entities.add(str(entity))
+                            except (TypeError, ValueError):
+                                logger.warning(f"Could not add entity to set: {entity}")
 
                 # Add message length
                 message_lengths.append(len(msg.content))
@@ -652,8 +841,34 @@ class MetricsService:
                     for topic in msg.topics:
                         topic_frequency[topic] = topic_frequency.get(topic, 0) + 1
                 if msg.entities:
+                    # Process entities to handle dictionaries
                     for entity in msg.entities:
-                        entity_frequency[entity] = entity_frequency.get(entity, 0) + 1
+                        entity_key = None
+                        if isinstance(entity, dict):
+                            # For dictionaries, extract a string representation
+                            if 'entity' in entity and isinstance(entity['entity'], str):
+                                entity_key = entity['entity']
+                            elif 'standard_form' in entity and isinstance(entity['standard_form'], str):
+                                entity_key = entity['standard_form']
+                            else:
+                                # Use a string representation
+                                try:
+                                    entity_key = str(entity)
+                                except Exception:
+                                    continue  # Skip if we can't create a string key
+                        elif isinstance(entity, str):
+                            # Strings can be used directly
+                            entity_key = entity
+                        elif entity is not None:
+                            # Convert other types to string
+                            try:
+                                entity_key = str(entity)
+                            except Exception:
+                                continue  # Skip if we can't create a string key
+                        
+                        # Update frequency for this entity key
+                        if entity_key is not None:
+                            entity_frequency[entity_key] = entity_frequency.get(entity_key, 0) + 1
 
         # Compile metrics
         metrics = {
@@ -749,7 +964,29 @@ class MetricsService:
             if msg.topics:
                 topics.update(msg.topics)
             if msg.entities:
-                entities.update(msg.entities)
+                # Process entities to handle dictionaries
+                for entity in msg.entities:
+                    if isinstance(entity, dict):
+                        # For dictionaries, extract a string representation
+                        if 'entity' in entity and isinstance(entity['entity'], str):
+                            entities.add(entity['entity'])
+                        elif 'standard_form' in entity and isinstance(entity['standard_form'], str):
+                            entities.add(entity['standard_form'])
+                        else:
+                            # Use a string representation
+                            try:
+                                entities.add(str(entity))
+                            except (TypeError, ValueError):
+                                pass
+                    elif isinstance(entity, str):
+                        # Strings are already hashable
+                        entities.add(entity)
+                    elif entity is not None:
+                        # Convert other types to string
+                        try:
+                            entities.add(str(entity))
+                        except (TypeError, ValueError):
+                            pass
 
         return {
             "id": conversation.id,
@@ -796,6 +1033,9 @@ class LoggingService:
         """
         run_id = str(uuid.uuid4())
         timestamp = datetime.now().isoformat()
+
+        # Reset performance counters at the start of a run
+        PerformanceTimer.reset()
 
         run_info = {
             "id": run_id,
@@ -848,9 +1088,41 @@ class LoggingService:
             )
             self.store.save_metric(run_id, f"conversation_{i}", conv_metrics)
 
+        # Collect performance metrics
+        performance_stats = PerformanceTimer.get_stats()
+        self.store.save_metric(run_id, "performance", performance_stats)
+        
+        # Get token usage
+        token_metrics = performance_stats.get('tokens', {})
+        
         # Save overall statistics
         self.store.save_metric(run_id, "num_conversations", len(dataset.conversations))
         self.store.save_metric(run_id, "generation_time", run_info["duration"])
+        self.store.save_metric(run_id, "token_usage", token_metrics.get('all', {}))
+        
+        # Log performance summary
+        if 'tokens' in performance_stats and 'all' in performance_stats['tokens']:
+            all_tokens = performance_stats['tokens']['all']
+            self.logger.info(
+                f"Token usage: {all_tokens.get('total', 0)} total tokens "
+                f"({all_tokens.get('input', 0)} input, {all_tokens.get('output', 0)} output) "
+                f"across {all_tokens.get('calls', 0)} API calls"
+            )
+            
+        # Calculate and log throughput metrics
+        total_time = run_info["duration"]
+        if total_time > 0 and dataset.conversations:
+            convs_per_sec = len(dataset.conversations) / total_time
+            tokens_per_sec = performance_stats.get('tokens', {}).get('all', {}).get('total', 0) / total_time
+            
+            self.store.save_metric(run_id, "throughput", {
+                "conversations_per_second": convs_per_sec,
+                "tokens_per_second": tokens_per_sec
+            })
+            
+            self.logger.info(
+                f"Throughput: {convs_per_sec:.2f} conversations/sec, {tokens_per_sec:.2f} tokens/sec"
+            )
 
         self.logger.info(
             f"Completed run {run_id}, duration: {run_info['duration']:.2f}s"

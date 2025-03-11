@@ -13,4 +13,4 @@ services:
       - LOG_LEVEL=INFO
       - OUTPUT_DIR=/app/output
       - PYTHONPATH=/app
-    command: python -m src.faker generate -c /app/examples/config.yaml
+    command: python -m src.faker generate -c /app/examples/config_financial.yaml

@@ -26,9 +26,10 @@ llm:
 
 # Dataset generation parameters
 dataset:
-  num_conversations: 100  # Increased number of conversations
+  num_conversations: 10  # Increased number of conversations
   formats: ["split", "json", "jsonl"]  # List of output formats to generate
-  output_dir: "${OUTPUT_DIR}"          # Will be replaced with env var
+  #output_dir: "${OUTPUT_DIR}"          # Will be replaced with env var
+  output_dir: "/tmp/faker_output"
 
 # Conversation parameters
 conversation:
@@ -78,7 +79,27 @@ conversation:
   parallel_enhancement: true      # Enable parallel metadata enhancement
   max_parallel_enhancement: 10    # Increased for more performance
   use_batch_requests: true        # Use batch requests for message enhancement
-  batch_chunk_size: 20           # Increased for more performance
+  batch_chunk_size: 20            # Increased for more performance
+  enforce_two_person: true        # Strictly limit to two-person conversations
+  
+  # Dynamic fields example - these can be referenced in templates with {{field_name}}
+  dynamic_fields:
+    advisor_title:
+      - "Senior Financial Advisor"
+      - "Wealth Management Specialist"
+      - "Investment Strategist"
+      - "Portfolio Manager"
+    client_age:
+      - "35"
+      - "42"
+      - "56"
+      - "67"
+      - "28"
+    meeting_type:
+      - "Initial Consultation"
+      - "Portfolio Review"
+      - "Retirement Planning"
+      - "Tax Strategy"
 
   # Rate limiting and performance parameters
   calls_per_minute: 120           # Increased API calls per minute (rate limit)
@@ -139,13 +160,78 @@ templates:
     The content should be diverse, but always professional and inoffensive.
     The conversations should also range in formality, and length (short and informal vs long and formal).
     The entities and topics should also be relevant to the financial industry.
+    
+    CRITICAL INSTRUCTION: You MUST use the actual names provided in your output conversation.
+    - For advisor, use ONLY the specific name provided (e.g., "John Smith", "Sarah Johnson")
+    - For client, use ONLY the specific name provided (e.g., "Michael Brown", "Emily Wilson")
+    - You MUST directly reference these names in the conversation content
+    - Personalize the conversation by having the advisor address the client by their name
+    - Personalize client messages to occasionally mention the advisor by name
+    - Your generated messages MUST include several instances of these real names
+    - NEVER output template syntax like {{advisor_name}} or {{client_name}} - use the actual name values instead
+    - ONLY use the exact roles you're given (like "advisor" and "client") - NEVER introduce other roles like "trader" or "researcher" that weren't specified
+    
+    EXAMPLES:
+    
+    ✅ CORRECT: "Hello Michael Brown, I'm John Smith. Let me review your portfolio allocation."
+    ❌ INCORRECT: "Hello {{client_name}}, I'm {{advisor_name}}. Let me review your portfolio allocation."
+    
+    ✅ CORRECT: "John Smith called earlier about the recent market volatility. When can we schedule a follow-up?"
+    ❌ INCORRECT: "{{advisor_name}} called earlier about the recent market volatility. When can we schedule a follow-up?"
+    
+  # Conversation script template to guide the flow of conversation 
+  conversation_script: |
+    Create a conversation script/outline between {{roles_0}} ({{speaker1_name}}) and {{roles_1}} ({{speaker2_name}}).
+    
+    The outline should determine the flow of who speaks when, including when the same person might speak twice in a row.
+    
+    Domain: {{domain}}
+    Meeting Type: {{meeting_type}}
+    
+    The conversation should have between {{min_messages}} and {{max_messages}} message turns.
+    
+    Output the script as a JSON array with this format:
+    [
+      {
+        "speaker": "{{roles_0}}",
+        "speaker_name": "{{speaker1_name}}",
+        "subject": "Brief description of what they'll talk about",
+        "consecutive": false
+      },
+      {
+        "speaker": "{{roles_1}}",
+        "speaker_name": "{{speaker2_name}}",
+        "subject": "Brief description of what they'll talk about",
+        "consecutive": false
+      },
+      {
+        "speaker": "{{roles_0}}",
+        "speaker_name": "{{speaker1_name}}",
+        "subject": "Follow-up point - this is a consecutive message",
+        "consecutive": true
+      }
+    ]
+    
+    IMPORTANT:
+    1. Make sure the conversation has a logical flow
+    2. Only use "consecutive": true when it makes sense for someone to speak twice in a row
+    3. This script will guide the actual message generation
+    4. Natural conversations sometimes have consecutive messages from the same speaker, but not too many
+    5. For a conversation with {{min_messages}}-{{max_messages}} messages, include 1-3 consecutive messages where appropriate
 
   # Main conversation generation template
   conversation: |
     Generate a realistic conversation between an investment advisor and a client for {{advisor_firm}}.
+    
+    IMPORTANT: This conversation should ONLY include messages from the following roles:
+    {{roles}}
+    Do NOT introduce any other roles like "trader" or "researcher" that aren't specified above.
 
     Advisor: {{advisor_name}} ({{advisor_id}})
+    Advisor Title: {{advisor_title}}  
     Client: {{client_name}} ({{client_id}})
+    Client Age: {{client_age}}
+    Meeting Type: {{meeting_type}}
     Domain: {{domain}}
     Investment Style: {{random(investment_styles)}}
     Client Experience Level: {{random(client_experience_levels)}}
@@ -183,8 +269,24 @@ templates:
       ...
     ]
     
-    IMPORTANT: Use the advisor and client names in the conversation. Make the conversation personalized
-    for these specific individuals and refer to them by name occasionally in the messages.
+    NAME USAGE REQUIREMENTS:
+    1. You MUST use the actual advisor name "{{advisor_name}}" multiple times in the advisor's messages
+    2. You MUST use the actual client name "{{client_name}}" multiple times in the conversation
+    3. The advisor MUST address the client by name at least twice
+    4. The client should occasionally mention the advisor by name
+    5. NEVER use template syntax ({{name}}) in the output content - use the actual name values
+
+    EXAMPLES OF CORRECT NAME USAGE (assuming advisor_name is "John Smith" and client_name is "Michael Brown"):
+    ✅ "Hello Michael Brown, this is John Smith from {{advisor_firm}}. How are you today?"
+    ✅ "John Smith mentioned that we should consider increasing our exposure to technology stocks."
+    ✅ "I've reviewed your portfolio, Michael Brown, and I have some recommendations."
+    ✅ "Thank you for your insights, John Smith. I'll consider your recommendation."
+
+    Remember: In your output, replace any {{name}} placeholders with the actual names provided:
+    - Advisor: "{{advisor_name}}"
+    - Client: "{{client_name}}"
+    
+    CHECK your final output carefully to ensure all placeholders are replaced with real names!
 
   # Additional templates for generating personas (optional)
   client_persona: |

@@ -9,6 +9,9 @@ import logging
 import re
 from typing import Any, Dict, List, Optional, Tuple, Union
 
+# Import timer for performance logging
+from src.faker.logging_service import PerformanceTimer, timer
+
 
 logger = logging.getLogger(__name__)
 
@@ -107,14 +110,18 @@ def repair_json(text: str) -> str:
     return text
 
 
+@timer("validate_messages")
 def validate_conversation_messages(
-    messages: List[Dict], required_roles: Optional[List[str]] = None
+    messages: List[Dict], 
+    required_roles: Optional[List[str]] = None,
+    context_vars: Optional[Dict[str, Any]] = None
 ) -> Tuple[List[Dict], bool]:
     """Validate and fix conversation messages against schema.
     
     Args:
         messages: List of message dictionaries to validate
         required_roles: List of roles that should be present
+        context_vars: Optional context variables to replace placeholders in content
         
     Returns:
         Tuple of (fixed_messages, is_fully_valid)
@@ -128,6 +135,9 @@ def validate_conversation_messages(
     
     valid_messages = []
     is_fully_valid = True
+    
+    # Start timer for placeholder detection
+    PerformanceTimer.start_timer("placeholder_detection")
     
     for i, message in enumerate(messages):
         # Check if message is a dictionary
@@ -160,19 +170,93 @@ def validate_conversation_messages(
             'content': message.get('content', ''),
         }
         
+        # Process content to replace any remaining placeholders if context is provided
+        if 'content' in clean_message and isinstance(clean_message['content'], str):
+            content = clean_message['content']
+            
+            # If context is provided, use it to replace placeholders
+            if context_vars:
+                # Look for template placeholders like {{var_name}}
+                placeholder_pattern = r'\{\{([^}]+)\}\}'
+                placeholders = re.findall(placeholder_pattern, content)
+                
+                if placeholders:
+                    logger.warning(f"Found template placeholders in message {i}: {placeholders}")
+                    
+                    # Replace placeholders with actual values
+                    for placeholder in placeholders:
+                        placeholder_name = placeholder.strip()
+                        if placeholder_name in context_vars and isinstance(context_vars[placeholder_name], str):
+                            placeholder_pattern = f'{{{{{placeholder_name}}}}}'
+                            content = content.replace(placeholder_pattern, context_vars[placeholder_name])
+                            logger.info(f"Replaced placeholder {placeholder_name} with {context_vars[placeholder_name]}")
+            
+            # Extra check for name patterns even without explicit placeholders
+            if context_vars:
+                # Check for typical placeholder patterns that might not be in {{}} format
+                name_patterns = [
+                    (r'\[([A-Za-z_]+_name)\]', r'\1'),         # [advisor_name]
+                    (r'\<([A-Za-z_]+_name)\>', r'\1'),         # <advisor_name>
+                    (r'__([A-Za-z_]+_name)__', r'\1'),         # __advisor_name__
+                    (r'ADVISOR_NAME', 'advisor_name'),         # ADVISOR_NAME
+                    (r'CLIENT_NAME', 'client_name'),           # CLIENT_NAME
+                    (r'AGENT_NAME', 'agent_name'),             # AGENT_NAME
+                    (r'USER_NAME', 'user_name'),               # USER_NAME
+                    (r'CUSTOMER_NAME', 'user_name'),           # CUSTOMER_NAME
+                    (r'SUPPORT_AGENT_NAME', 'agent_name'),     # SUPPORT_AGENT_NAME
+                ]
+                
+                for pattern, replacement_key in name_patterns:
+                    matches = re.findall(pattern, content)
+                    if matches:
+                        for match in matches:
+                            key = re.sub(pattern, replacement_key, match)
+                            if key in context_vars and isinstance(context_vars[key], str):
+                                content = re.sub(pattern, context_vars[key], content)
+                                logger.info(f"Replaced variant placeholder format {match} with {context_vars[key]}")
+            
+            # Update the message with fixed content
+            clean_message['content'] = content
+        
         # Add metadata fields, using empty lists for array fields
         for field in metadata_fields:
-            if field in ['entities', 'topics'] and (field not in message or message[field] is None):
-                clean_message[field] = []
+            if field in ['entities', 'topics']:
+                # These should be lists - ensure they are
+                if field not in message or message[field] is None:
+                    clean_message[field] = []
+                elif not isinstance(message[field], list):
+                    # If the field exists but isn't a list, convert it
+                    logger.warning(f"Message {i} has {field} that is not a list, converting: {message[field]}")
+                    try:
+                        # Try to convert to list if possible, otherwise use empty list
+                        clean_message[field] = list(message[field]) if hasattr(message[field], '__iter__') else []
+                    except (TypeError, ValueError):
+                        clean_message[field] = []
+                else:
+                    # It's a proper list, use it directly
+                    clean_message[field] = message[field]
             else:
+                # For other fields, just use the value or None
                 clean_message[field] = message.get(field, None)
                 
         valid_messages.append(clean_message)
     
+    PerformanceTimer.end_timer("placeholder_detection")
+    
     # Check if there's at least one message from each required role
     if required_roles:
+        # Convert required_roles to a set of strings to ensure we don't have unhashable types
+        required_roles_set = set()
+        for role in required_roles:
+            if isinstance(role, str):
+                required_roles_set.add(role)
+            else:
+                # If it's not a string, convert it to a string to avoid unhashable types
+                logger.warning(f"Non-string role detected: {role}, converting to string")
+                required_roles_set.add(str(role))
+                
         roles_present = {msg['role'] for msg in valid_messages}
-        missing_roles = set(required_roles) - roles_present
+        missing_roles = required_roles_set - roles_present
         if missing_roles:
             logger.warning(f"Conversation is missing required roles: {missing_roles}")
             is_fully_valid = False

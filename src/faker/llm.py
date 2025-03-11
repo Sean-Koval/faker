@@ -26,6 +26,9 @@ from google.cloud import aiplatform
 from google.oauth2 import service_account
 from vertexai.generative_models import GenerationConfig, GenerativeModel, Part
 
+# Import performance timer
+from src.faker.logging_service import PerformanceTimer, timer, async_timer
+
 # Import errors module for exception handling
 try:
     from google.cloud.aiplatform import errors as aiplatform_errors
@@ -626,6 +629,7 @@ class VertexAIProvider(LLMProvider):
             self.logger.warning("Falling back to default GenerationConfig")
             return GenerationConfig()
 
+    @timer("llm_generate")
     def generate(
         self,
         prompt: str,
@@ -681,15 +685,28 @@ class VertexAIProvider(LLMProvider):
         # Check cache if enabled
         cache_hit = False
         if self.use_cache and use_cache:
+            PerformanceTimer.start_timer("llm_cache_lookup")
             cache_key = self._get_cache_key(prompt, system_prompt, parameters.to_dict())
             cached_response = self.response_cache.get(cache_key)
+            PerformanceTimer.end_timer("llm_cache_lookup")
             
             if cached_response:
                 self.logger.debug(f"Cache hit for prompt: {prompt[:50]}...")
+                PerformanceTimer.start_timer("llm_cache_hit")
                 result, metadata = cached_response
+                PerformanceTimer.end_timer("llm_cache_hit")
                 
                 # Add cache hit info to metadata
                 metadata["cache_hit"] = True
+                
+                # Estimate token counts for recording even for cache hits
+                input_tokens = self._estimate_token_count(prompt)
+                if system_prompt:
+                    input_tokens += self._estimate_token_count(system_prompt)
+                output_tokens = metadata.get("token_count", {}).get("output", self._estimate_token_count(result))
+                
+                # Record in performance timer as a cache hit
+                PerformanceTimer.record_tokens("llm_cache_hit", input_tokens, output_tokens)
                 
                 return result, metadata
 
@@ -706,11 +723,17 @@ class VertexAIProvider(LLMProvider):
             with self.rate_limiter:
                 # Track timing
                 start_time = time.time()
+                
+                # Start API call timer
+                PerformanceTimer.start_timer("llm_api_call")
 
                 # Generate response
                 result, response_obj = generate_func(
                     prompt, system_prompt, generation_config
                 )
+                
+                # End API call timer
+                PerformanceTimer.end_timer("llm_api_call")
 
                 # Calculate generation time
                 generation_time = time.time() - start_time
@@ -720,10 +743,39 @@ class VertexAIProvider(LLMProvider):
                     generation_config, generation_time, response_obj
                 )
                 
+                # Estimate token counts
+                input_tokens = self._estimate_token_count(prompt)
+                if system_prompt:
+                    input_tokens += self._estimate_token_count(system_prompt)
+                output_tokens = self._estimate_token_count(result)
+                
+                # Try to get accurate token counts from response if available
+                if hasattr(response_obj, "usage_metadata"):
+                    try:
+                        usage = response_obj.usage_metadata
+                        if hasattr(usage, "prompt_token_count"):
+                            input_tokens = usage.prompt_token_count
+                        if hasattr(usage, "candidates_token_count"):
+                            output_tokens = usage.candidates_token_count
+                    except Exception as e:
+                        self.logger.warning(f"Failed to extract token counts from response: {e}")
+                
+                # Record token usage
+                PerformanceTimer.record_tokens("llm_generate", input_tokens, output_tokens)
+                
+                # Add token counts to metadata
+                metadata["token_count"] = {
+                    "input": input_tokens,
+                    "output": output_tokens,
+                    "total": input_tokens + output_tokens
+                }
+                
                 # Cache the result if enabled
                 if self.use_cache and use_cache:
+                    PerformanceTimer.start_timer("llm_cache_store")
                     cache_key = self._get_cache_key(prompt, system_prompt, parameters.to_dict())
                     self.response_cache.put(cache_key, (result, metadata))
+                    PerformanceTimer.end_timer("llm_cache_store")
 
                 self.logger.debug(f"Received response from {self.model}: {result[:100]}...")
                 return result, metadata
@@ -823,6 +875,29 @@ class VertexAIProvider(LLMProvider):
 
         return generate_with_retry()
 
+    def _estimate_token_count(self, text: str) -> int:
+        """Estimate the number of tokens in a text.
+        
+        This is a simple estimation based on whitespace splitting.
+        For accurate token counting, a proper tokenizer should be used.
+        
+        Args:
+            text: The text to estimate token count for
+            
+        Returns:
+            Estimated token count
+        """
+        if not text:
+            return 0
+            
+        # Simple whitespace-based estimation (rough approximation)
+        # A better approach would be to use the actual tokenizer
+        # but this is a reasonable approximation for performance metrics
+        words = text.split()
+        
+        # Based on GPT-3 average of ~1.3 tokens per word
+        return int(len(words) * 1.3) + 2  # Adding 2 for safety
+    
     def _create_metadata(
         self,
         generation_config: GenerationConfig,

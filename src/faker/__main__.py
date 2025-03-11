@@ -26,6 +26,15 @@ def setup_logging(level=logging.INFO, log_file=None):
     log_level = os.getenv("LOG_LEVEL", "INFO").upper()
     numeric_level = getattr(logging, log_level, logging.INFO)
 
+    # Ensure logs directory exists
+    logs_dir = os.path.join(os.getcwd(), "logs")
+    os.makedirs(logs_dir, exist_ok=True)
+    
+    # Create a timestamped log file if none specified
+    if not log_file:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        log_file = os.path.join(logs_dir, f"faker_{timestamp}.log")
+    
     handlers = []
 
     # Console handler
@@ -37,22 +46,23 @@ def setup_logging(level=logging.INFO, log_file=None):
         )
     )
     handlers.append(console_handler)
-
-    # File handler if specified
-    if log_file:
-        # Ensure log directory exists
-        log_dir = os.path.dirname(log_file)
-        if log_dir:
-            os.makedirs(log_dir, exist_ok=True)
-
+    
+    # File handler with detailed formatting
+    try:
         file_handler = logging.FileHandler(log_file)
         file_handler.setFormatter(
             logging.Formatter(
-                "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+                "%(asctime)s - %(name)s - %(levelname)s - %(pathname)s:%(lineno)d - %(message)s",
                 datefmt="%Y-%m-%d %H:%M:%S",
             )
         )
         handlers.append(file_handler)
+        print(f"Logging to file: {log_file}")
+    except Exception as e:
+        print(f"Warning: Could not set up file logging: {e}")
+    
+
+    # We already set up the file handler above, so no need for duplicate code here
 
     # Configure root logger
     logging.basicConfig(level=numeric_level, handlers=handlers)

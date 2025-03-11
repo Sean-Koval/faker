@@ -189,7 +189,30 @@ class Conversation:
         """
         entities = set()
         for message in self.messages:
-            entities.update(message.entities)
+            # Safely handle entities that might be dictionaries or complex objects
+            if hasattr(message, 'entities'):
+                # Process each entity to ensure they're hashable
+                for entity in message.entities:
+                    try:
+                        if isinstance(entity, dict):
+                            # For dictionaries, use a string representation or extract the entity name
+                            if 'entity' in entity and isinstance(entity['entity'], str):
+                                entities.add(entity['entity'])
+                            elif 'standard_form' in entity and isinstance(entity['standard_form'], str):
+                                entities.add(entity['standard_form'])
+                            else:
+                                # If no appropriate field, convert dict to string
+                                entities.add(str(entity))
+                        elif isinstance(entity, str):
+                            # Strings are already hashable
+                            entities.add(entity)
+                        elif entity is not None:
+                            # Convert other types to string for hashing
+                            entities.add(str(entity))
+                    except (TypeError, ValueError) as e:
+                        # If entity can't be processed, log warning in debug mode
+                        import logging
+                        logging.getLogger(__name__).debug(f"Error processing entity in extract_entities: {e}")
         return entities
 
 

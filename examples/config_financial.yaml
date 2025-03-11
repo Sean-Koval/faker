@@ -1,0 +1,483 @@
+# Configuration for Faker to generate financial conversations with company tagging
+---
+name: "financial-company-tagging-dataset"
+version: "1.0.0"
+description: "A synthetic dataset of financial conversations with company name variations for tagging"
+tags:
+  - finance
+  - company_tagging
+  - investment_research
+  - synthetic_data
+  - entity_recognition
+  - trading
+
+# LLM provider configuration
+llm:
+  provider: "gemini"
+  model: "gemini-1.5-flash-002"  # Using Flash for optimized performance with these types of generations
+  project_id: "${PROJECT_ID}"
+  location: "${LOCATION}"
+  credentials_path: "${GOOGLE_APPLICATION_CREDENTIALS}"
+  
+  # Generation parameters optimized for varied financial content
+  temperature: 0.4  # Slightly higher to encourage more variation in company mentions
+  top_p: 0.92
+  top_k: 40
+  max_tokens: 1536  # Increased for longer analyses
+
+# Dataset generation parameters
+dataset:
+  num_conversations: 10  # As requested in requirements
+  formats: ["split", "json", "jsonl"]
+  output_dir: "${OUTPUT_DIR}" # "/tmp/faker_output"
+
+# Conversation parameters
+conversation:
+  roles:
+    - analyst
+    - portfolio_manager
+    - researcher
+    - trader
+  min_messages: 3
+  max_messages: 8
+  domains:
+    - trade_discussion
+    - deal_negotiation
+    - stock_analysis
+    - market_update
+    - earnings_report
+    
+  # Predefined speakers with custom IDs
+  speakers:
+    analysts:
+      - id: "analyst_1"
+        name: "Alex Morgan"
+        role: "analyst"
+        metadata: 
+          experience: "senior"
+          specialty: "technology sector"
+      - id: "analyst_2"
+        name: "Sarah Chen"
+        role: "analyst"
+        metadata:
+          experience: "mid-level"
+          specialty: "energy sector"
+      - id: "analyst_3"
+        name: "James Wilson"
+        role: "analyst"
+        metadata:
+          experience: "senior"
+          specialty: "financial sector"
+    portfolio_managers:
+      - id: "pm_1"
+        name: "Robert Park"
+        role: "portfolio_manager"
+        metadata:
+          aum: "$2.5B"
+          strategy: "growth"
+      - id: "pm_2"
+        name: "Emma Gonzalez"
+        role: "portfolio_manager"
+        metadata:
+          aum: "$1.8B"
+          strategy: "value"
+    researchers:
+      - id: "researcher_1"
+        name: "David Kim"
+        role: "researcher"
+        metadata:
+          focus: "quantitative models"
+      - id: "researcher_2"
+        name: "Olivia Singh"
+        role: "researcher"
+        metadata:
+          focus: "fundamental analysis"
+    traders:
+      - id: "trader_1"
+        name: "Michael Chang"
+        role: "trader"
+        metadata:
+          desk: "equities"
+      - id: "trader_2"
+        name: "Jessica Patel"
+        role: "trader"
+        metadata:
+          desk: "fixed income"
+  
+  # Performance parameters
+  use_hybrid_approach: false # true
+  parallel_enhancement: true
+  max_parallel_enhancement: 10
+  use_batch_requests: true
+  batch_chunk_size: 20
+  calls_per_minute: 120
+  max_parallel_calls: 20
+  use_cache: true
+  cache_size: 2000
+  temperature: 0.4
+  
+  # Required company entities to include in various forms
+  # These will be used in the templates to ensure coverage
+  dynamic_fields:
+    message_length:
+      - "short"
+      - "medium"
+      - "long"
+    company_focus:
+      - "single"
+      - "multiple"
+      - "comparison"
+    message_style:
+      - "formal"
+      - "informal"
+      - "analytical"
+      - "speculative"
+      - "news-based"
+    company_format:
+      - "formal_names"
+      - "ticker_symbols"
+      - "abbreviations"
+      - "variations"
+      - "mixed"
+  
+  # Additional variables for prompt templates
+  variables:
+    # Specific names for participants
+    analyst_name: "Alex Morgan"
+    pm_name: "Robert Park"
+    trader_name: "Michael Chang"
+    researcher_name: "David Kim"
+    
+    # Required company list from specifications
+    companies:
+      formal_names:
+        - "JPMorgan Chase"
+        - "Bank of America"
+        - "Tesla Inc."
+        - "Alphabet Inc."
+        - "Goldman Sachs Group"
+        - "Citigroup Inc."
+        - "Microsoft Corporation"
+        - "Apple Inc."
+        - "Blackrock Inc."
+        - "Meta Platforms Inc."
+        - "Amazon.com Inc."
+        - "Iberdrola SA"
+        - "Orsted A/S"
+        - "McKinsey & Company"
+        - "Adidas AG"
+        - "TikTok Inc."
+        - "General Motors Company"
+        - "Blackstone Group Inc."
+        - "Equatorial Energia"
+        - "Omega Capital"
+        - "Auren Energia"
+        - "Eletrobras"
+        - "Copasa"
+        - "TotalEnergies SE"
+        - "Allianz SE"
+        - "Eni SpA"
+        - "Covivio"
+        - "Li Auto Inc."
+        - "Politico"
+        - "Euractiv"
+        - "Amer Sports"
+        - "Anta Sports"
+        - "Keji Technology"
+        - "TianYuan Corp"
+        - "Grab Holdings"
+        - "Cajamar"
+        - "Bandhan Bank"
+        - "Remitly Global"
+        - "Vodacom Group"
+        - "Nu Holdings (Nubank)"
+        - "MercadoLibre Inc."
+        - "Ecolab Inc."
+        - "Maplecroft"
+        - "Cargill Inc."
+        - "Sons of Gwalia"
+        - "Sappi Limited"
+        - "Kubota Corporation"
+        - "Suzano SA"
+        - "Tapestry Inc."
+      ticker_symbols:
+        - "JPM"
+        - "BAC"
+        - "TSLA"
+        - "GOOGL"
+        - "GS"
+        - "C"
+        - "MSFT"
+        - "AAPL"
+        - "BLK"
+        - "META"
+        - "AMZN"
+        - "IBE.MC"
+        - "ORSTED.CO"
+        - "ADDY"
+        - "GM"
+        - "BX"
+        - "EQTL3"
+        - "OMGE3"
+        - "AURE3"
+        - "ELET3"
+        - "CSMG3"
+        - "TTE"
+        - "ALV"
+        - "ENI.MI"
+        - "COV.PA"
+        - "LI"
+        - "MELI"
+        - "ECL"
+        - "VOD.JO"
+        - "NU"
+        - "SAPIY"
+        - "KUBTY"
+        - "SUZB3"
+        - "TPR"
+      abbreviations:
+        - "JPM"
+        - "BofA"
+        - "GS"
+        - "Citi"
+        - "GOOG"
+        - "MSFT"
+        - "AAPL"
+        - "TotalE"
+        - "GMC"
+        - "BBL"
+        - "MercLib"
+        - "Elab"
+        - "MpCrft"
+        - "SoG"
+        - "TikT"
+        - "McK"
+        - "Iber"
+        - "Alz"
+      variations_misspellings:
+        - "JPMorgen"
+        - "BoA"
+        - "Tessla"
+        - "Googl"
+        - "MorganStanly"
+        - "CityGroup"
+        - "Blackrock"
+        - "Appleinc"
+        - "MetaPlatform"
+        - "Amazn"
+        - "McKenzie"
+        - "TicTok"
+        - "GenMotors"
+        - "Blakstone"
+    market_sectors:
+      - "Technology"
+      - "Finance"
+      - "Healthcare"
+      - "Energy"
+      - "Consumer Goods"
+      - "Real Estate"
+      - "Utilities"
+      - "Telecommunications"
+      - "Materials"
+      - "Industrial"
+    market_conditions:
+      - "bullish"
+      - "bearish"
+      - "volatile"
+      - "stable"
+      - "recovering"
+      - "overheated"
+    economic_indicators:
+      - "CPI"
+      - "GDP"
+      - "unemployment rate"
+      - "Fed funds rate"
+      - "PMI"
+      - "consumer confidence"
+      - "retail sales"
+      - "housing starts"
+    earnings_metrics:
+      - "EPS"
+      - "revenue"
+      - "EBITDA"
+      - "operating margin"
+      - "gross margin"
+      - "cash flow"
+      - "guidance"
+      - "forward P/E"
+
+# Prompt templates
+templates:
+  # System prompt to guide the generation
+  system_prompt: |
+    You are an expert in generating realistic financial conversations between professionals in the investment industry.
+    
+    Your task is to create authentic-sounding, varied financial messages that include company mentions in different forms:
+    1. Full formal company names (e.g., "JPMorgan Chase", "Tesla Inc.")
+    2. Ticker symbols (e.g., "JPM", "TSLA")
+    3. Common abbreviations (e.g., "BofA", "GS")
+    4. Occasional misspellings or variations (e.g., "MorganStanly", "BoA", "Tessla")
+    
+    REQUIREMENTS:
+    - Create {{message_length}} messages with {{company_focus}} companies using {{message_style}} style
+    - Mix different company name formats within conversations 
+    - Include a balanced mix of company types (not just tech/finance)
+    - Mention SPECIFIC companies from the provided list rather than generics
+    - For market updates, include 3+ company references with varied name formats
+    - For trade discussions, use quick informal messages with ticker symbols
+    - For analysis, use formal multi-sentence messages with full company names
+    - Messages must be realistic for professional financial discussions
+    - All messages must contain at least one company mention
+    - Each conversation should feature different company references
+    
+    CRITICAL: Use actual company names or variations, not placeholders. 
+    - Use "{{speaker_name}}" for the person speaking, not generic roles
+    - Vary how companies are mentioned in natural ways
+
+  # Main conversation generation template
+  conversation: |
+    Generate a realistic financial conversation between professionals in the investment industry.
+    
+    Participants:
+    - Analyst: {{analyst_name}}
+    - Portfolio Manager: {{pm_name}}
+    - Trader: {{trader_name}}
+    
+    Domain: {{domain}}
+    Message Style: {{message_style}}
+    Message Length: {{message_length}}
+    Company Focus: {{company_focus}}
+    Company Format: {{company_format}}
+    
+    REQUIREMENTS:
+    1. Create a {{domain}} conversation with {{min_messages}}-{{max_messages}} messages
+    2. All messages MUST mention at least one actual company from the companies list
+    3. Use the specified naming format ({{company_format}}) most often, but mix in others occasionally
+    4. For "mixed" format, use a balanced combination of formal names, tickers, abbreviations and occasional variations
+    5. Include specific financial details, numbers, and realistic market context
+    6. Messages should have natural variation in length, formality, and style
+    7. When using tickers, sometimes include $ symbol (e.g., $AAPL)
+    
+    COMPANY MENTION EXAMPLES:
+    - Formal: "JPMorgan Chase reported strong earnings, while Bank of America missed estimates."
+    - Tickers: "JPM up 2%, BAC down 1% after Fed announcement. TSLA volatile but AAPL steady."
+    - Abbreviations: "JPM performing better than BofA this quarter. GS and Citi also reporting next week."
+    - Variations: "Thoughts on Tessla's China numbers? MorganStanly has a new note saying BoA is undervalued."
+    - Mixed: "JPM ($JPM) outperforming peers, but BoA still struggling. Tesla delivered strong growth vs GOOGL's miss."
+    
+    FORMAT SPECIFICATIONS:
+    - For TRADE DISCUSSIONS: Use short, fast-paced messages with ticker symbols and abbreviations.
+    - For DEAL NEGOTIATIONS: Use detailed messages with formal company names, specific numbers and conditions.
+    - For STOCK ANALYSIS: Use longer, structured messages with metrics, comparisons between companies.
+    - For MARKET UPDATES: Include multiple companies, sectors, and macro context.
+    - For EARNINGS REPORTS: Include specific financial metrics, guidance, and market reactions.
+    
+    Format the output as a JSON array with the following structure:
+    [
+      {
+        "role": "analyst/trader/portfolio_manager/researcher",
+        "speaker": "ACTUAL_NAME",  
+        "content": "...",
+        "entities": [
+          {
+            "entity": "...",  // The exact form used in text (e.g., "JPM", "Tesla Inc.", "BoA")
+            "entity_type": "company", 
+            "standard_form": "..." // Canonical company name (e.g., "JPMorgan Chase", "Tesla Inc.")
+          },
+          ... (other entities)
+        ],
+        "sentiment": "positive/negative/neutral",
+        "topics": ["...", "..."],
+        "formality": "formal/informal" 
+      },
+      ... (more messages)
+    ]
+
+    NOTES FOR ENTITY EXTRACTION:
+    1. The "entity" field should contain the EXACT text as it appears in the message
+    2. The "standard_form" should be the formal company name for any variation
+    3. EVERY company mention must have an entity entry, including repeated mentions
+
+  # Specific template for short trade messages
+  trade_discussion: |
+    Generate a series of short, realistic trade discussion messages between financial professionals.
+
+    Participants:
+    - Analyst: {{analyst_name}}
+    - Portfolio Manager: {{pm_name}}
+    - Trader: {{trader_name}}
+    
+    REQUIREMENTS:
+    1. Create 5-10 brief trade-focused messages (5-20 words each)
+    2. Every message MUST include at least one ticker symbol ($JPM, TSLA, etc.)
+    3. Some messages should include multiple tickers
+    4. Include realistic price movements, trading volumes, and market context
+    5. Use informal, rapid communication style common among traders
+    6. Include occasional abbreviations or shorthand
+    7. Reference specific market events, news, or catalysts
+    
+    EXAMPLE MESSAGE FORMAT:
+    "$AAPL breaking out, volume spiking. Thoughts on entry?"
+    "JPM dumping on Fed news. Support at 142.50, watching closely."
+    "Anyone seeing the TSLA options flow? Huge call volume at 250 strike."
+    
+    Format as a JSON array using the same structure as the main conversation template.
+
+  # Specific template for company analysis
+  company_analysis: |
+    Generate a detailed company analysis conversation between financial professionals.
+
+    Participants:
+    - Analyst: {{analyst_name}}
+    - Portfolio Manager: {{pm_name}}
+    - Researcher: {{researcher_name}}
+    
+    Companies to analyze: {{random(5, companies.formal_names)}}
+    
+    REQUIREMENTS:
+    1. Create 3-6 detailed analytical messages (50-150 words each)
+    2. Include specific metrics, valuation multiples, and comparisons
+    3. Reference company performance, industry position, and outlook
+    4. Mention related companies and competitive dynamics
+    5. Use formal language with appropriate financial terminology
+    6. Include mix of formal names and ticker symbols
+    7. Address specific catalysts, risks, and opportunities
+    
+    EXAMPLE MESSAGE STRUCTURE:
+    - Begin with main thesis or observation about the company
+    - Support with specific data points or metrics
+    - Compare to peers or sector
+    - Conclude with investment perspective or questions
+    
+    Format as a JSON array using the same structure as the main conversation template.
+
+  # Template for market update 
+  market_update: |
+    Generate a realistic market update discussion between financial professionals.
+
+    Participants:
+    - Analyst: {{analyst_name}}
+    - Portfolio Manager: {{pm_name}}
+    - Researcher: {{researcher_name}}
+    - Trader: {{trader_name}}
+    
+    Market Condition: {{random(market_conditions)}}
+    Featured Sector: {{random(market_sectors)}}
+    Economic Context: {{random(economic_indicators)}} data released recently
+    
+    REQUIREMENTS:
+    1. Create 3-5 comprehensive market update messages
+    2. Each message MUST mention multiple companies (3+ per message)
+    3. Use varied company reference formats (formal names, tickers, abbreviations)
+    4. Include sector performance, market indices, and macro context
+    5. Reference specific market events, economic data, or news
+    6. Use professional but conversational language
+    7. Include forward-looking perspectives and implications
+    
+    EXAMPLE MESSAGE STRUCTURE:
+    - Market overview and major indices
+    - Sector performance with specific company examples
+    - Economic data impacts on specific stocks
+    - Notable outperformers/underperformers with reasons
+    
+    Format as a JSON array using the same structure as the main conversation template.

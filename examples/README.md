@@ -4,6 +4,7 @@ This directory contains example configuration files for generating different typ
 
 ## Usage
 
+Edit the config.yaml file path in the docker-compose.yaml file in order to change the configuration.
 To generate a dataset using an example configuration:
 
 ```bash
